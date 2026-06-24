@@ -36,34 +36,27 @@
 //                                                    specific patient
 // ============================================================
 (function () {
-  "use strict";
+    "use strict";
 
-  var PORT = "3007";
-  var hostname = window.location.hostname;
-  var API_BASE;
+    const API_BASE = "https://tempdhas.onrender.com";
 
-  if (hostname === "localhost" || hostname === "127.0.0.1") {
-    API_BASE = "http://localhost:" + PORT;
-  } else {
-    // Mobile on same WiFi — use same host IP automatically
-    API_BASE = "http://" + hostname + ":" + PORT;
-  }
+    window.API_BASE = API_BASE;
 
-  // For production deployment, override here:
-  // API_BASE = "https://your-domain.com";
+    function getAuthHeaders(extraHeaders) {
+        var token = localStorage.getItem("dhas_token");
+        var headers = { "Content-Type": "application/json" };
 
-  window.API_BASE = API_BASE;
+        if (token) headers["Authorization"] = "Bearer " + token;
 
-  function getAuthHeaders(extraHeaders) {
-    var token = localStorage.getItem("dhas_token");
-    var headers = { "Content-Type": "application/json" };
-    if (token) headers["Authorization"] = "Bearer " + token;
-    if (extraHeaders && typeof extraHeaders === "object") {
-      Object.assign(headers, extraHeaders);
+        if (extraHeaders && typeof extraHeaders === "object") {
+            Object.assign(headers, extraHeaders);
+        }
+
+        return headers;
     }
-    return headers;
-  }
-  window.getAuthHeaders = getAuthHeaders;
+
+    window.getAuthHeaders = getAuthHeaders;
+})();
 
   function getUser() {
     try { return JSON.parse(localStorage.getItem("dhas_user")) || null; }
