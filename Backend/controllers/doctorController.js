@@ -565,9 +565,28 @@ const getPatientReport = async (req, res) => {
 };
 
 /* ── CONNECT PATIENT TO DOCTOR (patient action — sets pending) ── */
-const connectDoctor = async (req, res) => {
-    const patientId   = req.userId;
+const connectDoctor = (req, res) => {
+
+    console.log("CONNECT BODY =", req.body);
+
+    if (!req.body) {
+        return res.status(400).json({
+            success: false,
+            message: "No request body received."
+        });
+    }
+
     const { invite_code } = req.body;
+
+    if (!invite_code) {
+        return res.status(400).json({
+            success: false,
+            message: "Invite code is required."
+        });
+    }
+
+    // existing code below...
+};
 
     if (!invite_code)
         return res.json({ success: false, message: "Please enter an invite code." });
