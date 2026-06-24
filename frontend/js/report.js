@@ -65,7 +65,10 @@ async function showReportViewer(id) {
     try {
         const res = await fetch(`${BASE_URL}/reports/view/${id}`, {
             method: "GET",
-            headers: window.getAuthHeaders()
+            headers: {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer " + localStorage.getItem("dhas_token")
+}
         });
 
         if (!res.ok) {
@@ -196,7 +199,10 @@ function uploadReport() {
         try {
             const res = await fetch(`${BASE_URL}/reports/upload`, {
                 method: "POST",
-                headers: window.getAuthHeaders(),
+                headers: {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer " + localStorage.getItem("dhas_token")
+},
                 body: JSON.stringify({
                     user_id:  user.id,
                     filename: file.name,        // ← always 'filename', no underscore
@@ -243,7 +249,10 @@ async function displayReports() {
     try {
         const res = await fetch(`${BASE_URL}/reports/${user.id}`, {
             method: "GET",
-            headers: window.getAuthHeaders()
+            headers: {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer " + localStorage.getItem("dhas_token")
+}
         });
 
         const data = await res.json();
@@ -307,7 +316,10 @@ async function deleteReport(id) {
     try {
         const res = await fetch(`${BASE_URL}/reports/${id}`, {
             method: "DELETE",
-            headers: window.getAuthHeaders()
+            headers: {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer " + localStorage.getItem("dhas_token")
+}
         });
         const data = await res.json();
 
