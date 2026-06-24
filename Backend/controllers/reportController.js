@@ -7,9 +7,19 @@ const db = require("../config/db");
 const { isSelf } = require("../middleware/authMiddleware");
 
 /* ── UPLOAD ─────────────────────────────────────────────────── */
+/* ── UPLOAD ─────────────────────────────────────────────────── */
 const uploadReport = (req, res) => {
+
+    console.log("=== UPLOAD STARTED ===");
+    console.log("req.userId =", req.userId);
+
     const user_id = req.userId;
     const { filename, filesize, filetype, dataurl } = req.body;
+
+    console.log("filename =", filename);
+    console.log("filesize =", filesize);
+    console.log("filetype =", filetype);
+    console.log("dataurl length =", dataurl ? dataurl.length : 0);
 
     if (!filename || !String(filename).trim()) {
         return res.json({ success: false, message: "Filename missing." });
@@ -26,13 +36,17 @@ const uploadReport = (req, res) => {
             message: "File is too large. Maximum size is approximately 7 MB."
         });
     }
-
+console.log("About to insert into database...");
     db.query(
         `INSERT INTO reports (user_id, filename, filesize, filetype, dataurl, uploaded_at)
          VALUES (?, ?, ?, ?, ?, NOW())`,
         [user_id, String(filename).trim(), filesize || "", filetype || "", dataurl],
         (err) => {
-            if (err) {
+
+    console.log("Database callback reached");
+
+    if (err) {
+        console.error("uploadReport DB error:", err);
                 console.error("uploadReport DB error:", err.message, "| Code:", err.code);
                 if (
                     err.code === "ER_NET_PACKET_TOO_LARGE" ||
