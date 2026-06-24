@@ -565,9 +565,11 @@ const getPatientReport = async (req, res) => {
 };
 
 /* ── CONNECT PATIENT TO DOCTOR (patient action — sets pending) ── */
-const connectDoctor = (req, res) => {
+const connectDoctor = async (req, res) => {
 
     console.log("CONNECT BODY =", req.body);
+
+    const patientId = req.userId;
 
     if (!req.body) {
         return res.status(400).json({
@@ -585,19 +587,18 @@ const connectDoctor = (req, res) => {
         });
     }
 
-    // existing code below...
-};
-
-    if (!invite_code)
-        return res.json({ success: false, message: "Please enter an invite code." });
-
     try {
         const [doctors] = await db.promise().query(
             "SELECT id, name, speciality FROM doctors WHERE invite_code = ?",
             [invite_code.toUpperCase().trim()]
         );
-        if (doctors.length === 0)
-            return res.json({ success: false, message: "Invalid invite code. Please check with your doctor." });
+
+        if (doctors.length === 0) {
+            return res.json({
+                success: false,
+                message: "Invalid invite code. Please check with your doctor."
+            });
+        }
 
         const doctor = doctors[0];
 
@@ -608,20 +609,32 @@ const connectDoctor = (req, res) => {
 
         if (existing.length > 0) {
             const status = existing[0].status;
-            if (status === 'accepted')
-                return res.json({ success: false, message: `You are already connected to Dr. ${doctor.name}.` });
-            if (status === 'pending')
-                return res.json({ success: false, message: `Your request to Dr. ${doctor.name} is already pending approval.` });
-            if (status === 'rejected') {
+
+            if (status === "accepted") {
+                return res.json({
+                    success: false,
+                    message: `You are already connected to Dr. ${doctor.name}.`
+                });
+            }
+
+            if (status === "pending") {
+                return res.json({
+                    success: false,
+                    message: `Your request to Dr. ${doctor.name} is already pending approval.`
+                });
+            }
+
+            if (status === "rejected") {
                 await db.promise().query(
-                    "UPDATE doctor_patient_connections SET status = 'pending', requested_at = NOW(), responded_at = NULL WHERE id = ?",
+                    "UPDATE doctor_patient_connections SET status='pending', requested_at=NOW(), responded_at=NULL WHERE id=?",
                     [existing[0].id]
                 );
+
                 return res.json({
                     success: true,
                     pending: true,
-                    message: `Connection request re-sent to Dr. ${doctor.name}. Waiting for approval.`,
-                    doctor
+                    doctor,
+                    message: `Connection request re-sent to Dr. ${doctor.name}.`
                 });
             }
         }
@@ -631,15 +644,20 @@ const connectDoctor = (req, res) => {
             [doctor.id, patientId]
         );
 
-        res.json({
+        return res.json({
             success: true,
             pending: true,
-            message: `Connection request sent to Dr. ${doctor.name}. Waiting for their approval.`,
-            doctor
+            doctor,
+            message: `Connection request sent to Dr. ${doctor.name}.`
         });
+
     } catch (err) {
-        console.error("connectDoctor error:", err.message);
-        res.json({ success: false, message: "Failed to connect. Please try again." });
+        console.error("connectDoctor error:", err);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to connect. Please try again."
+        });
     }
 };
 
