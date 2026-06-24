@@ -15,26 +15,9 @@ const app = express();
 //             worked: there was no socket endpoint at all. ──
 const httpServer = http.createServer(app);
 
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "http://localhost:3007";
-
-// ── Reusable origin check, shared between Express CORS and Socket.IO CORS ──
-function isAllowedOrigin(origin) {
-    if (!origin) return true;
-    if (origin === ALLOWED_ORIGIN) return true;
-    if (/^http:\/\/(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(origin)) return true;
-    if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return true;
-    if (/^http:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)) return true;
-    return false;
-}
-
 app.use(cors({
-    origin: function (origin, callback) {
-        if (isAllowedOrigin(origin)) return callback(null, true);
-        callback(new Error("Not allowed by CORS"));
-    },
-    methods:        ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials:    true
+    origin: true,
+    credentials: true
 }));
 
 app.options("/{*splat}", cors());
