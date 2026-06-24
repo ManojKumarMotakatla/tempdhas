@@ -14,6 +14,7 @@ const app = express();
 //             nothing to bind to — this was the #1 reason chat never
 //             worked: there was no socket endpoint at all. ──
 const httpServer = http.createServer(app);
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "http://localhost:3007";
 
 app.use(cors({
     origin: true,
