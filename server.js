@@ -44,6 +44,13 @@ app.use(globalLimiter);
 // ── Body parser — large enough for base64 report uploads ─────
 app.use(express.json({ limit: "12mb" }));
 app.use(express.urlencoded({ limit: "12mb", extended: true }));
+app.use((req, res, next) => {
+    console.log("====== BODY DEBUG ======");
+    console.log(req.method, req.originalUrl);
+    console.log("Headers:", req.headers["content-type"]);
+    console.log("Body:", req.body);
+    next();
+});
 
 // ── Static file serving ───────────────────────────────────────
 app.use(express.static(path.join(__dirname, "frontend")));
