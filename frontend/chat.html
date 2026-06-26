@@ -316,6 +316,96 @@
   body.dark #chatToast.success { background:#052e16; border-color:#166534; color:#86efac; }
   body.dark #chatToast.error   { background:#450a0a; border-color:#991b1b; color:#fca5a5; }
 
+  /* ── VOICE MESSAGE ── */
+  .voice-btn {
+    width:40px; height:40px; border-radius:50%; border:none;
+    background:var(--bg); color:var(--muted);
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; flex-shrink:0; font-size:18px;
+    transition:all .18s; position:relative;
+  }
+  .voice-btn:hover { color:var(--blue); background:#eff6ff; }
+  .voice-btn.recording {
+    background:var(--rose); color:#fff;
+    animation: mic-pulse .8s ease-in-out infinite;
+  }
+  @keyframes mic-pulse {
+    0%,100% { box-shadow:0 0 0 0 rgba(242,92,125,.5); }
+    50%      { box-shadow:0 0 0 10px rgba(242,92,125,0); }
+  }
+
+  /* Recording overlay bar */
+  .voice-record-bar {
+    display:none; align-items:center; gap:10px;
+    padding:8px 14px; background:rgba(242,92,125,.08);
+    border-top:1.5px solid rgba(242,92,125,.25);
+    flex-shrink:0;
+  }
+  .voice-record-bar.active { display:flex; }
+  .vr-dot {
+    width:10px; height:10px; border-radius:50%;
+    background:var(--rose); flex-shrink:0;
+    animation: blink .9s step-start infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+  .vr-timer { font-size:.85rem; font-weight:700; color:var(--rose); min-width:42px; }
+  .vr-wave {
+    flex:1; height:28px; border-radius:6px;
+    background:linear-gradient(90deg,rgba(242,92,125,.15),rgba(242,92,125,.35));
+    overflow:hidden; position:relative;
+  }
+  .vr-wave::after {
+    content:''; position:absolute; inset:0;
+    background:linear-gradient(90deg,transparent 0%,rgba(242,92,125,.4) 50%,transparent 100%);
+    background-size:200% 100%;
+    animation: wave-sweep 1.4s linear infinite;
+  }
+  @keyframes wave-sweep { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  .vr-cancel {
+    font-size:.75rem; font-weight:700; color:var(--muted);
+    cursor:pointer; padding:4px 10px; border-radius:8px;
+    border:1px solid var(--border); background:var(--bg);
+    white-space:nowrap; transition:all .15s;
+  }
+  .vr-cancel:hover { color:var(--rose); border-color:var(--rose); }
+  .vr-send {
+    font-size:.75rem; font-weight:700; color:#fff;
+    cursor:pointer; padding:4px 12px; border-radius:8px;
+    border:none; background:linear-gradient(135deg,var(--rose),#f87c9a);
+    white-space:nowrap; display:flex; align-items:center; gap:5px;
+    transition:all .15s;
+  }
+  .vr-send:hover { opacity:.88; }
+
+  /* Voice bubble audio player */
+  .voice-bubble { display:flex; align-items:center; gap:10px; min-width:190px; }
+  .vb-play-btn {
+    width:36px; height:36px; border-radius:50%; border:none; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    font-size:15px; transition:all .18s;
+  }
+  .msg-row.mine  .vb-play-btn { background:rgba(255,255,255,.25); color:#fff; }
+  .msg-row.theirs .vb-play-btn { background:var(--blue); color:#fff; }
+  .vb-play-btn:hover { transform:scale(1.1); }
+  .vb-waveform {
+    flex:1; height:24px; border-radius:4px; overflow:hidden;
+    background:rgba(255,255,255,.15); position:relative; cursor:pointer;
+  }
+  .msg-row.theirs .vb-waveform { background:rgba(42,108,246,.12); }
+  .vb-progress {
+    position:absolute; left:0; top:0; bottom:0;
+    background:rgba(255,255,255,.4); transition:width .1s linear;
+    border-radius:4px;
+  }
+  .msg-row.theirs .vb-progress { background:rgba(42,108,246,.35); }
+  .vb-bars { display:flex; align-items:center; gap:2px; height:100%; padding:0 6px; position:relative; z-index:1; }
+  .vb-bar {
+    width:3px; border-radius:2px; flex-shrink:0;
+    background:rgba(255,255,255,.6);
+  }
+  .msg-row.theirs .vb-bar { background:rgba(42,108,246,.6); }
+  .vb-dur { font-size:.7rem; font-weight:600; flex-shrink:0; opacity:.85; }
+
   /* ── MOBILE ── */
   @media (max-width: 760px) {
     .pane-list { position:absolute; inset:0; width:100%; z-index:5; }
@@ -335,6 +425,69 @@
 
 <div id="chatToast" role="status" aria-live="polite"></div>
 <div id="shareModalRoot"></div>
+
+<!-- MIC PERMISSION MODAL -->
+<div id="micPermModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9990;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(6px);">
+  <div style="background:var(--surface);border-radius:22px;width:100%;max-width:360px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.25);animation:micModalIn .25s cubic-bezier(.4,0,.2,1);">
+    <!-- Top accent -->
+    <div style="background:linear-gradient(135deg,#1e3a8a,var(--blue),var(--teal));padding:32px 24px 28px;text-align:center;position:relative;overflow:hidden;">
+      <div style="position:absolute;top:-30px;right:-30px;width:120px;height:120px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.15),transparent 70%);pointer-events:none;"></div>
+      <!-- Mic icon with ring -->
+      <div id="micModalIcon" style="width:72px;height:72px;border-radius:50%;background:rgba(255,255,255,.15);border:2px solid rgba(255,255,255,.3);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;position:relative;">
+        <i class="ti ti-microphone" style="font-size:32px;color:#fff;"></i>
+        <div style="position:absolute;inset:-6px;border-radius:50%;border:2px solid rgba(255,255,255,.2);animation:micRingPulse 2s ease-in-out infinite;"></div>
+      </div>
+      <div style="font-family:'Fraunces',serif;font-size:1.35rem;font-weight:700;color:#fff;margin-bottom:6px;">Microphone Access</div>
+      <div style="font-size:.82rem;color:rgba(255,255,255,.72);line-height:1.55;">DHAS needs your microphone to record and send voice messages securely.</div>
+    </div>
+
+    <!-- Body -->
+    <div style="padding:22px 24px 24px;">
+      <!-- What we use it for -->
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:22px;">
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg);border-radius:12px;border:1px solid var(--border);">
+          <div style="width:34px;height:34px;border-radius:10px;background:#eff6ff;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <i class="ti ti-wave-sine" style="font-size:16px;color:var(--blue);"></i>
+          </div>
+          <div>
+            <div style="font-size:.82rem;font-weight:700;color:var(--text);">Record voice messages</div>
+            <div style="font-size:.72rem;color:var(--muted);margin-top:1px;">Send audio directly in your chat</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg);border-radius:12px;border:1px solid var(--border);">
+          <div style="width:34px;height:34px;border-radius:10px;background:#e6faf8;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <i class="ti ti-lock" style="font-size:16px;color:var(--teal);"></i>
+          </div>
+          <div>
+            <div style="font-size:.82rem;font-weight:700;color:var(--text);">End-to-end encrypted</div>
+            <div style="font-size:.72rem;color:var(--muted);margin-top:1px;">Your voice is encrypted before sending</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status message (shown while requesting) -->
+      <div id="micStatusMsg" style="display:none;font-size:.8rem;font-weight:600;text-align:center;padding:9px 14px;border-radius:10px;margin-bottom:14px;"></div>
+
+      <!-- Buttons -->
+      <button id="micAllowBtn" onclick="DHAS_VOICE.requestPermission()" style="width:100%;padding:13px;border:none;border-radius:12px;background:linear-gradient(135deg,var(--blue),var(--teal));color:#fff;font-weight:700;font-size:.95rem;cursor:pointer;font-family:'DM Sans',sans-serif;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:10px;box-shadow:0 4px 18px rgba(42,108,246,.3);transition:all .2s;">
+        <i class="ti ti-microphone" style="font-size:16px;"></i>
+        Allow Microphone
+      </button>
+      <button onclick="DHAS_VOICE.dismissPermModal()" style="width:100%;padding:11px;border:1.5px solid var(--border);border-radius:12px;background:var(--bg);color:var(--muted);font-weight:600;font-size:.88rem;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s;">
+        Not now
+      </button>
+
+      <p style="text-align:center;font-size:.68rem;color:var(--muted);margin-top:14px;line-height:1.6;">
+        Permission is only used when you choose to record. You can revoke access anytime in your browser settings.
+      </p>
+    </div>
+  </div>
+</div>
+
+<style>
+@keyframes micModalIn { from{opacity:0;transform:scale(.94) translateY(10px)} to{opacity:1;transform:none} }
+@keyframes micRingPulse { 0%,100%{transform:scale(1);opacity:.5} 50%{transform:scale(1.15);opacity:.15} }
+</style>
 
 <!-- TOPBAR -->
 <header class="topbar">
@@ -409,8 +562,17 @@
       <span>Typing…</span>
     </div>
 
-    <!-- Composer (hidden until room opens) -->
-    <div class="composer" id="composerWrap" style="display:none;">
+      <!-- Voice recording bar (shown during recording) -->
+      <div class="voice-record-bar" id="voiceRecordBar">
+        <div class="vr-dot"></div>
+        <span class="vr-timer" id="vrTimer">0:00</span>
+        <div class="vr-wave"></div>
+        <button class="vr-cancel" id="vrCancelBtn">✕ Cancel</button>
+        <button class="vr-send" id="vrSendBtn"><i class="ti ti-send" style="font-size:12px"></i> Send</button>
+      </div>
+
+      <!-- Composer (hidden until room opens) -->
+      <div class="composer" id="composerWrap" style="display:none;">
       <button class="icon-btn" id="attachBtn" title="Attach" aria-label="Attach">
         <i class="ti ti-paperclip"></i>
       </button>
@@ -432,6 +594,9 @@
       <textarea id="messageInput" rows="1" placeholder="Type a message…"></textarea>
       <button class="icon-btn send-btn" id="sendBtn" aria-label="Send">
         <i class="ti ti-send"></i>
+      </button>
+      <button class="icon-btn voice-btn" id="voiceBtn" title="Voice message" aria-label="Record voice message">
+        <i class="ti ti-microphone"></i>
       </button>
     </div>
 
