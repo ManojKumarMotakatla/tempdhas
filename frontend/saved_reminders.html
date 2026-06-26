@@ -609,10 +609,10 @@ async function saveInlineEdit(id) {
       altBase:       sched==="alternate" ? new Date().toISOString() : null
     };
 
-    // ── FIXED: auth headers on add ──
+    // ── FIXED: auth headers + Content-Type on add ──
     const addData = await (await fetch(`${BASE}/reminders/add`, {
       method:"POST",
-     headers: window.getAuthHeaders(),
+     headers: window.getAuthHeadersJSON(),
       body: JSON.stringify(payload)
     })).json();
 
