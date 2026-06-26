@@ -476,7 +476,7 @@ async function executeDelete() {
   try {
     const res = await fetch(`${BASE}/profile/${userId}`, {
       method:  "DELETE",
-      headers: window.getAuthHeaders(),
+      headers: window.getAuthHeadersJSON(),
       body:    JSON.stringify({ password })
     });
     const d = await res.json();
