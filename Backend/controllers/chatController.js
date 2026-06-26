@@ -177,7 +177,7 @@ const sendMessage = async (req, res) => {
     const room = await verifyRoomAccess(room_id, role, id);
     if (!room) return res.status(403).json({ success: false, message: "Access denied." });
 
-    const allowedTypes = ["text", "image", "pdf", "symptom_share", "report_share"];
+    const allowedTypes = ["text", "image", "pdf", "voice", "symptom_share", "report_share"];
     if (!allowedTypes.includes(message_type))
         return res.status(400).json({ success: false, message: "Unsupported message type." });
 
