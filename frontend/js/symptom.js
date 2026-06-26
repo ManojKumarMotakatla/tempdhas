@@ -204,7 +204,6 @@ function updateCount() {
     }
 }
 
-// ── Submit Symptoms ────────────────────────────────────────────
 async function submitSymptoms() {
     const checked = [...document.querySelectorAll("#symptomList input[type=checkbox]:checked")]
         .map(cb => cb.value);
@@ -222,8 +221,17 @@ async function submitSymptoms() {
 
     const user = getUser();
     if (user) {
-        saveSymptomsToDB(user.id, checked, condition.label, condition.severityLabel)
-            .catch(err => console.warn("DB save failed (non-critical):", err));
+        showToast("Saving symptoms to database...", "success", 1500);
+        try {
+            const data = await saveSymptomsToDB(user.id, checked, condition.label, condition.severityLabel);
+            if (data.success) {
+                showToast("Symptoms saved successfully!", "success", 2000);
+            } else {
+                showToast("Failed to save symptoms: " + data.message, "error", 6000);
+            }
+        } catch (err) {
+            showToast("Network error: Could not save symptoms to server.", "error", 6000);
+        }
     }
 
     showResult(condition, conditionKey, checked);
