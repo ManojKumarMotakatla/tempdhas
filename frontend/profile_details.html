@@ -581,10 +581,10 @@ async function saveProfile() {
   btn.disabled = true; btn.textContent = "Saving…";
 
   try {
-    // ── FIX: send JWT token ──
+    // ── FIX: send JWT token + Content-Type for JSON body ──
     const res = await fetch(`${BASE}/profile/save`, {
       method:  "POST",
-      headers: window.getAuthHeaders() ,
+      headers: window.getAuthHeadersJSON(),
       body: JSON.stringify({
         user_id:       userId,
         name:          document.getElementById("fName").value.trim(),
