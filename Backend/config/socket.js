@@ -153,7 +153,8 @@ async function buildMessageRow(role, partyId, payload) {
         }
 
         case "image":
-        case "pdf": {
+        case "pdf":
+        case "voice": {
             if (!payload.file_url || !payload.file_name) return { error: "File information missing." };
             if (isEncrypted && !payload.file_iv) return { error: "Missing file encryption nonce." };
             return {
@@ -287,7 +288,7 @@ function initSocket(httpServer, allowedOriginRegexes = []) {
                 const room = await verifyRoomAccess(payload.room_id, role, partyId);
                 if (!room) return ack?.({ success: false, message: "You no longer have access to this conversation." });
 
-                const allowedTypes = ["text", "image", "pdf", "symptom_share", "report_share"];
+                const allowedTypes = ["text", "image", "pdf", "voice", "symptom_share", "report_share"];
                 if (!allowedTypes.includes(payload.message_type)) {
                     return ack?.({ success: false, message: "Unsupported message type." });
                 }
