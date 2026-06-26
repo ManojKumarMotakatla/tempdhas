@@ -410,6 +410,7 @@
     return {
       image:          "📷 Photo",
       pdf:            "📄 Document",
+      voice:          "🎤 Voice message",
       symptom_share:  "🩺 Symptom check shared",
       report_share:   "📁 Report shared"
     }[t] || "Message";
@@ -688,6 +689,9 @@
                 </div>
               </a>`;
 
+    } else if (m.message_type === "voice") {
+      return buildVoiceBubble(m);
+
     } else if (m.message_type === "symptom_share") {
       let meta = {};
       try { meta = typeof m.metadata === "string" ? JSON.parse(m.metadata) : (m.metadata || {}); } catch { meta = {}; }
@@ -913,7 +917,11 @@
     if (elAttachMenu) elAttachMenu.classList.remove("open");
   });
 
+  // Track whether the file picker was deliberately opened via the attach menu
+  let _fileInputIntentional = false;
+
   document.getElementById("optUploadFile")?.addEventListener("click", () => {
+    _fileInputIntentional = true;
     if (elFileInput) elFileInput.click();
     if (elAttachMenu) elAttachMenu.classList.remove("open");
   });
@@ -929,6 +937,13 @@
   // ── File upload ───────────────────────────────────────────────
   if (elFileInput) {
     elFileInput.addEventListener("change", async () => {
+      // Guard: ignore if the file picker wasn't intentionally opened
+      if (!_fileInputIntentional) {
+        elFileInput.value = "";
+        return;
+      }
+      _fileInputIntentional = false;
+
       const file = elFileInput.files[0];
       elFileInput.value = "";
       if (!file || !activeRoomId) return;
@@ -1266,7 +1281,511 @@
     if (elModalRoot) elModalRoot.innerHTML = "";
   }
 
-  // ── Open by partner ID ────────────────────────────────────────
+  // ── VOICE MESSAGES ────────────────────────────────────────────
+  // Permission flow:
+  //   1. First mic tap → check Permissions API (if available)
+  //   2. If "granted" → start recording immediately
+  //   3. If "prompt" or unknown → show our permission modal first
+  //   4. If "denied" → show denied guidance modal
+  //   5. After user clicks "Allow Microphone" in modal → call getUserMedia
+  //      (this triggers the native browser prompt), then start recording
+
+  let mediaRecorder    = null;
+  let audioChunks      = [];
+  let recordingTimer   = null;
+  let recordingSeconds = 0;
+  let isRecording      = false;
+  let _micPermState    = "unknown"; // "unknown"|"granted"|"prompt"|"denied"
+
+  const elVoiceBtn     = document.getElementById("voiceBtn");
+  const elVoiceBar     = document.getElementById("voiceRecordBar");
+  const elVrTimer      = document.getElementById("vrTimer");
+  const elVrCancel     = document.getElementById("vrCancelBtn");
+  const elVrSend       = document.getElementById("vrSendBtn");
+  const elMicModal     = document.getElementById("micPermModal");
+  const elMicAllowBtn  = document.getElementById("micAllowBtn");
+  const elMicStatus    = document.getElementById("micStatusMsg");
+
+  function formatRecordTime(sec) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m + ":" + (s < 10 ? "0" : "") + s;
+  }
+
+  // ── Check mic permission state ──────────────────────────────
+  async function checkMicPermission() {
+    if (!navigator.permissions) return "unknown";
+    try {
+      const result = await navigator.permissions.query({ name: "microphone" });
+      _micPermState = result.state; // "granted"|"prompt"|"denied"
+      result.onchange = () => { _micPermState = result.state; };
+      return result.state;
+    } catch {
+      return "unknown";
+    }
+  }
+
+  // ── Show / hide permission modal ────────────────────────────
+  function showMicModal(mode) {
+    if (!elMicModal) return;
+    // Reset state
+    if (elMicStatus) elMicStatus.style.display = "none";
+    if (elMicAllowBtn) {
+      elMicAllowBtn.disabled = false;
+      elMicAllowBtn.innerHTML = '<i class="ti ti-microphone" style="font-size:16px;"></i> Allow Microphone';
+    }
+
+    if (mode === "denied") {
+      // Show denied guidance instead of Allow button
+      if (elMicAllowBtn) elMicAllowBtn.style.display = "none";
+      showMicStatus("Microphone blocked. Tap the lock/info icon in your browser's address bar, set Microphone to Allow, then reload the page.", "error");
+    } else {
+      if (elMicAllowBtn) elMicAllowBtn.style.display = "flex";
+    }
+
+    elMicModal.style.display = "flex";
+  }
+
+  function hideMicModal() {
+    if (elMicModal) elMicModal.style.display = "none";
+    if (elMicAllowBtn) elMicAllowBtn.style.display = "flex";
+    if (elMicStatus) elMicStatus.style.display = "none";
+  }
+
+  function showMicStatus(msg, type) {
+    if (!elMicStatus) return;
+    const colors = {
+      info:    { bg:"#eff6ff", border:"#93c5fd", color:"#1e40af" },
+      success: { bg:"#d1fae5", border:"#6ee7b7", color:"#065f46" },
+      error:   { bg:"#fee2e2", border:"#fca5a5", color:"#991b1b" }
+    };
+    const c = colors[type] || colors.info;
+    elMicStatus.style.cssText = `display:block;background:${c.bg};border:1px solid ${c.border};color:${c.color};font-size:.8rem;font-weight:600;text-align:center;padding:9px 14px;border-radius:10px;margin-bottom:14px;`;
+    elMicStatus.textContent = msg;
+  }
+
+  // Called when user clicks "Allow Microphone" inside our modal
+  async function requestMicPermission() {
+    if (!elMicAllowBtn) return;
+    elMicAllowBtn.disabled = true;
+    elMicAllowBtn.innerHTML = '<i class="ti ti-loader-2" style="font-size:16px;animation:spin .7s linear infinite;"></i> Requesting…';
+    showMicStatus("Waiting for your browser permission prompt…", "info");
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      const denied = err.name === "NotAllowedError" || err.name === "PermissionDeniedError";
+      _micPermState = "denied";
+      if (denied) {
+        showMicStatus("Permission denied. Open your browser settings → Site Settings → Microphone → Allow for this site, then reload.", "error");
+        if (elMicAllowBtn) elMicAllowBtn.style.display = "none";
+      } else {
+        showMicStatus("Could not access microphone: " + (err.message || "unknown error"), "error");
+        elMicAllowBtn.disabled = false;
+        elMicAllowBtn.innerHTML = '<i class="ti ti-microphone" style="font-size:16px;"></i> Try Again';
+      }
+      return;
+    }
+
+    // Permission granted — close modal and start recording
+    _micPermState = "granted";
+    hideMicModal();
+    // Release this test stream; startRecording will open a fresh one
+    stream.getTracks().forEach(t => t.stop());
+    startRecording();
+  }
+
+  // ── Voice button tap ────────────────────────────────────────
+  async function handleVoiceBtnTap() {
+    if (isRecording) { stopRecording(true); return; }
+    if (!activeRoomId) { toast("Open a conversation first.", "error"); return; }
+
+    // Check permission state
+    const state = await checkMicPermission();
+
+    if (state === "granted") {
+      // Already allowed — go straight to recording
+      startRecording();
+    } else if (state === "denied") {
+      // Show modal with denied guidance
+      showMicModal("denied");
+    } else {
+      // "prompt" or "unknown" — show our friendly modal first
+      showMicModal("prompt");
+    }
+  }
+
+  async function startRecording() {
+    if (isRecording) return;
+    if (!activeRoomId) { toast("Open a conversation first.", "error"); return; }
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      const denied = err.name === "NotAllowedError" || err.name === "PermissionDeniedError";
+      _micPermState = "denied";
+      if (denied) {
+        showMicModal("denied");
+      } else {
+        toast("Could not access microphone. Please check your device.", "error");
+      }
+      return;
+    }
+
+    _micPermState = "granted";
+
+    // Pick best supported MIME type
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : MediaRecorder.isTypeSupported("audio/mp4")
+          ? "audio/mp4"
+          : "";
+
+    try {
+      mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    } catch {
+      mediaRecorder = new MediaRecorder(stream);
+    }
+
+    audioChunks = [];
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+    };
+
+    mediaRecorder.start(100); // collect chunks every 100ms
+    isRecording = true;
+    recordingSeconds = 0;
+
+    // Show recording UI
+    if (elVoiceBtn) {
+      elVoiceBtn.classList.add("recording");
+      elVoiceBtn.innerHTML = '<i class="ti ti-square-filled" style="font-size:14px"></i>';
+      elVoiceBtn.title = "Stop recording";
+    }
+    if (elVoiceBar) elVoiceBar.classList.add("active");
+    if (elVrTimer) elVrTimer.textContent = "0:00";
+
+    // Hide normal send button, show recording controls
+    const sendBtn = document.getElementById("sendBtn");
+    if (sendBtn) sendBtn.style.display = "none";
+
+    recordingTimer = setInterval(() => {
+      recordingSeconds++;
+      if (elVrTimer) elVrTimer.textContent = formatRecordTime(recordingSeconds);
+      // Auto-stop after 5 minutes
+      if (recordingSeconds >= 300) stopRecording(true);
+    }, 1000);
+  }
+
+  function stopRecording(autoSend) {
+    if (!mediaRecorder || !isRecording) return;
+
+    // Capture duration NOW before anything resets it
+    const capturedSeconds = recordingSeconds;
+
+    clearInterval(recordingTimer);
+    recordingTimer = null;
+    isRecording = false;
+
+    mediaRecorder.stop();
+
+    // Restore UI
+    if (elVoiceBtn) {
+      elVoiceBtn.classList.remove("recording");
+      elVoiceBtn.innerHTML = '<i class="ti ti-microphone"></i>';
+      elVoiceBtn.title = "Record voice message";
+    }
+    if (elVoiceBar) elVoiceBar.classList.remove("active");
+    const sendBtn = document.getElementById("sendBtn");
+    if (sendBtn) sendBtn.style.display = "";
+
+    if (autoSend) {
+      // Give MediaRecorder a moment to flush final chunk
+      setTimeout(() => uploadVoiceMessage(capturedSeconds), 150);
+    }
+  }
+
+  function cancelRecording() {
+    if (!mediaRecorder || !isRecording) return;
+    clearInterval(recordingTimer);
+    recordingTimer = null;
+    isRecording = false;
+    audioChunks = [];
+
+    try { mediaRecorder.stop(); } catch {}
+
+    if (elVoiceBtn) {
+      elVoiceBtn.classList.remove("recording");
+      elVoiceBtn.innerHTML = '<i class="ti ti-microphone"></i>';
+      elVoiceBtn.title = "Record voice message";
+    }
+    if (elVoiceBar) elVoiceBar.classList.remove("active");
+    const sendBtn = document.getElementById("sendBtn");
+    if (sendBtn) sendBtn.style.display = "";
+  }
+
+  async function uploadVoiceMessage(durationSeconds) {
+    if (!audioChunks.length || !activeRoomId) return;
+
+    // Use the passed-in duration (captured at stop time) or fall back to the
+    // current counter — avoids "0:00" caused by the counter resetting before
+    // the 150 ms setTimeout fires.
+    const durSecs    = (typeof durationSeconds === "number" && durationSeconds > 0)
+                       ? durationSeconds
+                       : recordingSeconds;
+
+    const actualMime = mediaRecorder?.mimeType || "audio/webm";
+    const ext        = actualMime.includes("mp4") ? "mp4"
+                     : actualMime.includes("ogg") ? "ogg"
+                     : "webm";
+    const blob     = new Blob(audioChunks, { type: actualMime });
+    audioChunks    = [];
+
+    if (blob.size < 500) { toast("Recording too short. Try again.", "error"); return; }
+    if (blob.size > 16 * 1024 * 1024) { toast("Voice message too long (max ~15 min).", "error"); return; }
+
+    // Encrypt the audio blob if we have a room key.
+    // IMPORTANT: keep the original audio extension even on the encrypted blob —
+    // sending it as application/octet-stream causes the server's file-type
+    // validation to reject the upload.
+    let uploadBlob  = blob;
+    let fileIv      = null;
+
+    try {
+      const key = await DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, activeRoomId);
+      if (key) {
+        const ab = await blob.arrayBuffer();
+        const { encryptedBuffer, iv } = await DHAS_CRYPTO.encryptFile(ab, key);
+        // Use the real audio MIME so the server accepts the file, then the
+        // file_iv field signals to the receiver that it needs decryption.
+        uploadBlob = new Blob([encryptedBuffer], { type: actualMime });
+        fileIv = iv;
+      }
+    } catch (e) {
+      console.warn("[Chat] Voice encrypt failed, uploading plaintext:", e);
+    }
+
+    toast("Sending voice message…", "success");
+
+    try {
+      const form = new FormData();
+      form.append("room_id", String(activeRoomId));
+      form.append("file", uploadBlob, `voice_${Date.now()}.${ext}`);
+      if (fileIv) form.append("file_iv", fileIv);
+
+      const res  = await fetch(`${BASE}/chat/upload?room_id=${encodeURIComponent(activeRoomId)}`, {
+        method: "POST", headers: authHeadersNoJSON(), body: form
+      });
+      const data = await res.json();
+
+      if (!data.success) { toast(data.message || "Voice upload failed.", "error"); return; }
+
+      emitSafe("send_message", {
+        room_id:      activeRoomId,
+        message_type: "voice",
+        file_name:    data.file.file_name,
+        file_size:    data.file.file_size,
+        file_mime:    actualMime,
+        file_url:     data.file.file_url,
+        content:      formatRecordTime(durSecs),   // store duration as content
+        is_encrypted: !!fileIv,
+        file_iv:      data.file.file_iv || fileIv
+      }, (ack) => {
+        if (!ack || !ack.success) toast((ack && ack.message) || "Failed to send voice message.", "error");
+      });
+    } catch (e) {
+      console.error("[Chat] Voice upload error:", e);
+      toast("Voice upload failed. Check your connection.", "error");
+    }
+  }
+
+  // Wire mic button: tap to start, tap again to stop+send
+  if (elVoiceBtn) {
+    elVoiceBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      handleVoiceBtnTap();
+    });
+  }
+  if (elVrCancel) elVrCancel.addEventListener("click", (e) => { e.stopPropagation(); cancelRecording(); });
+  if (elVrSend)   elVrSend.addEventListener("click",   (e) => { e.stopPropagation(); stopRecording(true); });
+
+  // Expose mic modal controls globally so inline onclick handlers in the modal work
+  window.DHAS_VOICE = {
+    requestPermission: requestMicPermission,
+    dismissPermModal:  hideMicModal
+  };
+
+  // Pre-check permission on page load so first tap is instant if already granted
+  checkMicPermission();
+
+  // ── VOICE BUBBLE RENDERER ─────────────────────────────────────
+  // Generates pseudo-waveform bars from a deterministic seed (message id)
+  // so the visual is consistent across reloads without storing real waveform data.
+  function generateWaveBars(seed, count) {
+    let bars = "";
+    for (let i = 0; i < count; i++) {
+      // Simple deterministic pseudo-random using seed + index
+      const h = 20 + (Math.abs(Math.sin(seed * 9.7 + i * 2.3)) * 60) | 0;
+      bars += `<div class="vb-bar" style="height:${h}%"></div>`;
+    }
+    return bars;
+  }
+
+  function buildVoiceBubble(m) {
+    const dur   = m.content || "0:00";   // stored as "M:SS"
+    const seed  = m.id || Math.random();
+    const bars  = generateWaveBars(seed, 28);
+    const isEnc = m.is_encrypted && m.file_iv;
+    const audioId = `voice-audio-${m.id}`;
+
+    if (isEnc) {
+      // Encrypted: show a decrypt-to-play button
+      return `<div class="voice-bubble" id="vb-${m.id}">
+        <button class="vb-play-btn" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})" title="Tap to decrypt &amp; play">
+          <i class="ti ti-lock"></i>
+        </button>
+        <div class="vb-waveform" style="cursor:pointer" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})">
+          <div class="vb-progress" style="width:0%"></div>
+          <div class="vb-bars">${bars}</div>
+        </div>
+        <span class="vb-dur">${escapeHTML(dur)}</span>
+      </div>`;
+    }
+
+    // Plain audio
+    const fileUrl = m.file_data || m.file_url || "";
+    const src     = fileUrl.startsWith("http") ? fileUrl : BASE + fileUrl;
+    return `<div class="voice-bubble" id="vb-${m.id}">
+      <audio id="${audioId}" src="${src}" preload="none" style="display:none"></audio>
+      <button class="vb-play-btn" onclick="DHAS_CHAT.toggleVoicePlay('${audioId}','vb-${m.id}',this)" title="Play voice message">
+        <i class="ti ti-player-play-filled"></i>
+      </button>
+      <div class="vb-waveform" onclick="DHAS_CHAT.seekVoice(event,'${audioId}','vb-${m.id}')">
+        <div class="vb-progress" style="width:0%"></div>
+        <div class="vb-bars">${bars}</div>
+      </div>
+      <span class="vb-dur" id="vbd-${m.id}">${escapeHTML(dur)}</span>
+    </div>`;
+  }
+
+  // Play/pause a voice bubble
+  function toggleVoicePlay(audioId, bubbleId, btn) {
+    const audio = document.getElementById(audioId);
+    if (!audio) return;
+
+    // Pause all other audio elements
+    document.querySelectorAll(".voice-bubble audio").forEach(a => {
+      if (a.id !== audioId && !a.paused) {
+        a.pause();
+        const otherBubbleId = a.id.replace("voice-audio-", "vb-");
+        const otherBtn = document.querySelector(`#${otherBubbleId} .vb-play-btn`);
+        if (otherBtn) otherBtn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
+      }
+    });
+
+    if (audio.paused) {
+      audio.play().catch(() => toast("Cannot play voice message.", "error"));
+      btn.innerHTML = '<i class="ti ti-player-pause-filled"></i>';
+    } else {
+      audio.pause();
+      btn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
+    }
+
+    // Progress tracking
+    audio.ontimeupdate = () => {
+      if (!audio.duration) return;
+      const pct = (audio.currentTime / audio.duration * 100).toFixed(1);
+      const progressEl = document.querySelector(`#${bubbleId} .vb-progress`);
+      if (progressEl) progressEl.style.width = pct + "%";
+      const durEl = document.getElementById(audioId.replace("voice-audio-", "vbd-"));
+      if (durEl) {
+        const rem = audio.duration - audio.currentTime;
+        durEl.textContent = "-" + formatRecordTime(Math.ceil(rem));
+      }
+    };
+    audio.onended = () => {
+      btn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
+      const progressEl = document.querySelector(`#${bubbleId} .vb-progress`);
+      if (progressEl) progressEl.style.width = "0%";
+      const durEl = document.getElementById(audioId.replace("voice-audio-", "vbd-"));
+      if (durEl) durEl.textContent = audio.dataset.origDur || "0:00";
+    };
+  }
+
+  function seekVoice(event, audioId, bubbleId) {
+    const audio  = document.getElementById(audioId);
+    const waveEl = document.querySelector(`#${bubbleId} .vb-waveform`);
+    if (!audio || !waveEl || !audio.duration) return;
+    const rect = waveEl.getBoundingClientRect();
+    const pct  = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    audio.currentTime = pct * audio.duration;
+  }
+
+  // Decrypt and play an encrypted voice message inline
+  async function decryptAndPlayVoice(msgId, fileUrl, ivB64, roomId) {
+    const bubbleEl = document.getElementById(`vb-${msgId}`);
+    const playBtn  = bubbleEl?.querySelector(".vb-play-btn");
+    if (playBtn) {
+      playBtn.innerHTML = '<i class="ti ti-loader-2" style="animation:spin .7s linear infinite;font-size:13px"></i>';
+      playBtn.disabled  = true;
+    }
+
+    try {
+      const fullUrl = fileUrl.startsWith("http") ? fileUrl : BASE + fileUrl;
+      const res  = await fetch(fullUrl, { headers: authHeadersNoJSON() });
+      const buf  = await res.arrayBuffer();
+      const key  = await DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, roomId);
+      if (!key) { toast("Cannot decrypt voice message.", "error"); return; }
+
+      const dec  = await DHAS_CRYPTO.decryptFile(buf, ivB64, key);
+      if (!dec)  { toast("Voice decryption failed.", "error"); return; }
+
+      const blob    = new Blob([dec], { type: "audio/webm" });
+      const blobUrl = URL.createObjectURL(blob);
+      const audioId = `voice-audio-${msgId}`;
+
+      // Replace the locked bubble with a live audio player
+      if (bubbleEl) {
+        const dur = bubbleEl.querySelector(".vb-dur")?.textContent || "0:00";
+        const seed = msgId;
+        const bars = generateWaveBars(seed, 28);
+        bubbleEl.innerHTML = `
+          <audio id="${audioId}" src="${blobUrl}" preload="auto" style="display:none" data-orig-dur="${escapeAttr(dur)}"></audio>
+          <button class="vb-play-btn" onclick="DHAS_CHAT.toggleVoicePlay('${audioId}','vb-${msgId}',this)" title="Play">
+            <i class="ti ti-player-play-filled"></i>
+          </button>
+          <div class="vb-waveform" onclick="DHAS_CHAT.seekVoice(event,'${audioId}','vb-${msgId}')">
+            <div class="vb-progress" style="width:0%"></div>
+            <div class="vb-bars">${bars}</div>
+          </div>
+          <span class="vb-dur" id="vbd-${msgId}">${escapeHTML(dur)}</span>`;
+
+        // Auto-play after decrypt
+        const audioEl = document.getElementById(audioId);
+        const btn     = bubbleEl.querySelector(".vb-play-btn");
+        if (audioEl && btn) toggleVoicePlay(audioId, `vb-${msgId}`, btn);
+      }
+    } catch (e) {
+      console.error("[Chat] Voice decrypt failed:", e);
+      toast("Failed to play voice message.", "error");
+      if (playBtn) {
+        playBtn.innerHTML = '<i class="ti ti-lock"></i>';
+        playBtn.disabled  = false;
+      }
+    }
+  }
+
+  // Expose to global DHAS_CHAT
+  // (merged into window.DHAS_CHAT below)
   async function openByPartner(partnerId, _retried) {
     const existing = contacts.find(c => String(c.partner_id) === String(partnerId));
     if (existing) { openRoom(existing.room_id); return; }
@@ -1331,7 +1850,10 @@
     openSharedReport,
     closeModal,
     decryptAndShowImage,
-    decryptAndDownloadFile
+    decryptAndDownloadFile,
+    decryptAndPlayVoice,
+    toggleVoicePlay,
+    seekVoice
   };
 
   // Expose helpers for inline onchange handlers
