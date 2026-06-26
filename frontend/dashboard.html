@@ -840,10 +840,11 @@ async function connectToDoctor() {
 async function loadDashboard() {
   if (!user.id) { renderSnapshot({}); return; }
   try {
-    const [pd, rd, rpd] = await Promise.all([
+    const [pd, rd, rpd, sd] = await Promise.all([
       fetch(`${BASE}/profile/${user.id}`,   { headers: window.getAuthHeaders() }).then(r => r.json()),
       fetch(`${BASE}/reminders/${user.id}`, { headers: window.getAuthHeaders() }).then(r => r.json()),
-      fetch(`${BASE}/reports/${user.id}`,   { headers: window.getAuthHeaders() }).then(r => r.json())
+      fetch(`${BASE}/reports/${user.id}`,   { headers: window.getAuthHeaders() }).then(r => r.json()),
+      fetch(`${BASE}/symptoms/history/${user.id}`, { headers: window.getAuthHeaders() }).then(r => r.json()).catch(() => ({ success: false }))
     ]);
 
     const p = (pd.success && pd.profile) ? pd.profile : {};
@@ -875,7 +876,7 @@ async function loadDashboard() {
       try { localStorage.setItem("dhas_user", JSON.stringify(user)); } catch (_) {}
     }
 
-    document.getElementById("statSymptoms").textContent  = p.symptom_count ?? "0";
+    document.getElementById("statSymptoms").textContent  = sd.success ? (sd.data || []).length : "0";
     document.getElementById("statReminders").textContent = rd.success  ? (rd.data  || []).length : "0";
     document.getElementById("statReports").textContent   = rpd.success ? (rpd.data || []).length : "0";
 
