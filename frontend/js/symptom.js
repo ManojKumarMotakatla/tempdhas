@@ -235,7 +235,7 @@ async function submitSymptoms() {
 async function saveSymptomsToDB(user_id, symptoms, condition_name, severity) {
     const res = await fetch(`${BASE_URL}/symptoms/save`, {
         method:  "POST",
-        headers: window.getAuthHeaders(),
+        headers: window.getAuthHeadersJSON(),
         body:    JSON.stringify({ user_id, symptoms, condition_name, severity })
     });
     const data = await res.json();
