@@ -117,12 +117,38 @@ app.use((err, req, res, next) => {
 //          the websocket handshake uses identical CORS rules to the
 //          REST API instead of duplicating a separate origin list. ──
 const { initSocket } = require("./Backend/config/socket");
-initSocket(httpServer, [
-    new RegExp(`^${ALLOWED_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`),
-    /^http:\/\/(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/,
-    /^http:\/\/localhost(:\d+)?$/,
-    /^http:\/\/127\.0\.0\.1(:\d+)?$/
-]);
+
+// Build the list of allowed Socket.IO origins.
+// On Render the same process serves both the static files and the API,
+// so the frontend origin IS the backend origin — we need to allow it.
+const buildAllowedOrigins = () => {
+    const regexes = [
+        /^http:\/\/(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/,
+        /^http:\/\/localhost(:\d+)?$/,
+        /^http:\/\/127\.0\.0\.1(:\d+)?$/,
+        // Allow HTTPS on any *.onrender.com subdomain (Render free tier)
+        /^https:\/\/[^.]+\.onrender\.com$/,
+    ];
+
+    // ALLOWED_ORIGIN single env var (legacy)
+    if (ALLOWED_ORIGIN && !ALLOWED_ORIGIN.includes("localhost")) {
+        try {
+            regexes.push(new RegExp(`^${ALLOWED_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+        } catch (_) {}
+    }
+
+    // ALLOWED_ORIGINS multi-value env var (comma-separated)
+    const extra = process.env.ALLOWED_ORIGINS || "";
+    extra.split(",").map(s => s.trim()).filter(Boolean).forEach(origin => {
+        try {
+            regexes.push(new RegExp(`^${origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+        } catch (_) {}
+    });
+
+    return regexes;
+};
+
+initSocket(httpServer, buildAllowedOrigins());
 
 const PORT = process.env.PORT || 3007;
 
