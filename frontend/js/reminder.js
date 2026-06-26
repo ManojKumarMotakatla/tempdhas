@@ -766,7 +766,7 @@ window.addReminder = async function () {
     try {
         const res  = await fetch(`${API}/add`, {
             method:"POST",
-            headers: window.getAuthHeaders(),
+            headers: window.getAuthHeadersJSON(),
             body:JSON.stringify(payload)
         });
         const data = await res.json();
@@ -1153,7 +1153,7 @@ window.saveEditReminder = async function (id) {
 
         const addData = await (await fetch(`${API}/add`, {
             method:"POST",
-            headers: window.getAuthHeaders(),
+            headers: window.getAuthHeadersJSON(),
             body:JSON.stringify(payload)
         })).json();
 
