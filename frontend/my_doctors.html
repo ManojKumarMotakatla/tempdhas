@@ -631,7 +631,7 @@ async function retryConnect(inviteCode) {
   try {
     const res  = await fetch(`${BASE}/doctor/connect`, {
       method:  "POST",
-      headers: window.getAuthHeaders(),
+      headers: window.getAuthHeadersJSON(),
       body:    JSON.stringify({ invite_code: inviteCode })
     });
     const data = await res.json();
@@ -827,7 +827,7 @@ async function connectToDoctor() {
   try {
     const res  = await fetch(`${BASE}/doctor/connect`, {
       method:  "POST",
-      headers: window.getAuthHeaders(),
+      headers: window.getAuthHeadersJSON(),
       body:    JSON.stringify({ invite_code: code })
     });
     const data = await res.json();
