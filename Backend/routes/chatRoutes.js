@@ -34,9 +34,9 @@ router.get(   "/report/:room_id/:report_id",  getSharedReport);
 
 router.use((err, req, res, next) => {
     if (err && err.message === "UNSUPPORTED_FILE_TYPE")
-        return res.status(415).json({ success: false, message: "Only PDF, JPG, PNG and WEBP files are supported." });
+        return res.status(415).json({ success: false, message: "Unsupported file type. Allowed: PDF, JPG, PNG, WEBP, and audio files." });
     if (err && err.code === "LIMIT_FILE_SIZE")
-        return res.status(413).json({ success: false, message: "File is too large. Maximum size is 8 MB." });
+        return res.status(413).json({ success: false, message: "File is too large. Maximum size is 32 MB." });
     next(err);
 });
 
