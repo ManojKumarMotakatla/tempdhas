@@ -226,6 +226,8 @@ async function submitSymptoms() {
             const data = await saveSymptomsToDB(user.id, checked, condition.label, condition.severityLabel);
             if (data.success) {
                 showToast("Symptoms saved successfully!", "success", 2000);
+            } else if (data.message && data.message.toLowerCase().includes("session expired")) {
+                showToast("Session expired — please log in again to save symptoms.", "error", 8000);
             } else {
                 showToast("Failed to save symptoms: " + data.message, "error", 6000);
             }
@@ -237,7 +239,7 @@ async function submitSymptoms() {
     showResult(condition, conditionKey, checked);
 }
 
-// ── Save to DB ─────────────────────────────────────────────────
+// ── Save to DB ──────────────────────────────────────────────
 // Saves condition.label as condition_name and condition.severityLabel as severity
 // severityLabel is always exactly "High", "Medium", or "Low"
 async function saveSymptomsToDB(user_id, symptoms, condition_name, severity) {
@@ -246,6 +248,15 @@ async function saveSymptomsToDB(user_id, symptoms, condition_name, severity) {
         headers: window.getAuthHeadersJSON(),
         body:    JSON.stringify({ user_id, symptoms, condition_name, severity })
     });
+    // Check HTTP status before parsing JSON
+    if (res.status === 401) {
+        console.warn("symptom save: session expired or missing token");
+        return { success: false, message: "Session expired. Please log in again." };
+    }
+    if (!res.ok) {
+        console.warn("symptom save: HTTP", res.status);
+        return { success: false, message: "Server error ("+res.status+"). Please try again." };
+    }
     const data = await res.json();
     if (!data.success) console.warn("symptom save:", data.message);
     return data;
