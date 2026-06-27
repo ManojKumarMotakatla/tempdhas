@@ -69,8 +69,7 @@ const changePassword = async (req, res) => {
         return res.status(401).json({ success: false, message: "Authentication required." });
     }
 
-    const { current_password, new_password } = req.body;
-
+    const { current_password, new_password } = req.body || {};
     // ── Input validation ──────────────────────────────────
     if (!current_password || !new_password) {
         return res.status(400).json({
