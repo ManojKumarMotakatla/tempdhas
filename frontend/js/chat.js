@@ -360,6 +360,12 @@
     try {
       const res = await fetch(`${BASE}/chat/contacts`, { headers: authHeaders() });
       if (!res.ok) {
+        // 401 = session expired or invalid — redirect to login
+        if (res.status === 401) {
+          toast("Session expired. Redirecting to login…", "error");
+          setTimeout(() => { window.location.href = "login.html"; }, 1800);
+          return;
+        }
         const err = await res.json().catch(() => ({}));
         contacts = [];
         renderContacts();
@@ -1828,7 +1834,10 @@
   function handleBack() {
     const isMobile = window.innerWidth <= 760;
     if (isMobile && activeRoomId) { closeRoom(); return; }
-    window.location.href = ME.role === "doctor" ? "doctor_dashboard.html" : "my_doctors.html";
+    // Patients came from dashboard.html (or my_doctors.html); send them back
+    // to the dashboard so the navigation feels natural. Doctors go to their
+    // own dashboard.
+    window.location.href = ME.role === "doctor" ? "doctor_dashboard.html" : "dashboard.html";
   }
 
   // ── Public API ────────────────────────────────────────────────
