@@ -1,7 +1,22 @@
 (function () {
     "use strict";
 
-    window.API_BASE = "https://tempdhas.onrender.com";
+    const isLocal = window.location.hostname === "localhost" ||
+                    window.location.hostname === "127.0.0.1" ||
+                    window.location.hostname.startsWith("192.168.") ||
+                    window.location.hostname.startsWith("10.") ||
+                    window.location.hostname.startsWith("172.");
+
+    if (isLocal) {
+        const port = window.location.port;
+        if (port && port !== "3007" && (port === "5500" || port === "3000" || port === "5173" || port === "5501")) {
+            window.API_BASE = window.location.protocol + "//" + window.location.hostname + ":3007";
+        } else {
+            window.API_BASE = window.location.origin;
+        }
+    } else {
+        window.API_BASE = "https://tempdhas.onrender.com";
+    }
 
     // ── Patient auth headers (reads dhas_token) ─────────────────
     // Pass { "Content-Type": "application/json" } in extraHeaders
