@@ -840,11 +840,15 @@ async function connectToDoctor() {
 async function loadDashboard() {
   if (!user.id) { renderSnapshot({}); return; }
   try {
+    // Each fetch has its own .catch() so one failure doesn't block the rest.
     const [pd, rd, rpd, sd] = await Promise.all([
-      fetch(`${BASE}/profile/${user.id}`,   { headers: window.getAuthHeaders() }).then(r => r.json()),
-      fetch(`${BASE}/reminders/${user.id}`, { headers: window.getAuthHeaders() }).then(r => r.json()),
-      fetch(`${BASE}/reports/${user.id}`,   { headers: window.getAuthHeaders() }).then(r => r.json()),
-      fetch(`${BASE}/symptoms/history/${user.id}`, { headers: window.getAuthHeaders() }).then(r => r.json()).catch(() => ({ success: false }))
+      fetch(`${BASE}/profile/${user.id}`,   { headers: window.getAuthHeaders() }).then(r => r.json()).catch(e => { console.warn("Profile fetch failed:", e); return { success: false }; }),
+      fetch(`${BASE}/reminders/${user.id}`, { headers: window.getAuthHeaders() }).then(r => r.json()).catch(e => { console.warn("Reminders fetch failed:", e); return { success: false }; }),
+      fetch(`${BASE}/reports/${user.id}`,   { headers: window.getAuthHeaders() }).then(r => r.json()).catch(e => { console.warn("Reports fetch failed:", e); return { success: false }; }),
+      fetch(`${BASE}/symptoms/history/${user.id}`, { headers: window.getAuthHeaders() }).then(r => {
+        if (!r.ok) { console.warn("Symptoms API returned HTTP", r.status); return { success: false }; }
+        return r.json();
+      }).catch(e => { console.warn("Symptoms fetch failed:", e); return { success: false }; })
     ]);
 
     const p = (pd.success && pd.profile) ? pd.profile : {};
