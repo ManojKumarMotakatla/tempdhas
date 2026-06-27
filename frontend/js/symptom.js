@@ -188,6 +188,13 @@ const SYMPTOM_LABELS = {
 
 // ── Toggle checkbox ────────────────────────────────────────────
 function toggleCheck(el, id) {
+    const ev = window.event;
+    if (ev && ev.target && ev.target.tagName === "INPUT") {
+        const cb = document.getElementById(id);
+        el.classList.toggle("checked", cb.checked);
+        updateCount();
+        return;
+    }
     const cb = document.getElementById(id);
     cb.checked = !cb.checked;
     el.classList.toggle("checked", cb.checked);
