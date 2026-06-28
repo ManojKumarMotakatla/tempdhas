@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="shortcut icon" href="favicon.svg">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <!-- Cache-busting: prevent stale service worker from serving old chat.html -->
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
@@ -45,10 +45,21 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+
+  /* Use dvh (dynamic viewport height) so the chat shell shrinks when
+     the mobile browser's address bar / nav bar is visible — this is what
+     prevents the composer from being hidden under the browser chrome.
+     Falls back to svh, then 100vh for older browsers. */
+  :root {
+    --vh: 1vh;  /* JS-updated fallback for browsers without dvh support */
+  }
+
   body {
     font-family:'DM Sans',sans-serif;
     background:var(--bg); color:var(--text);
-    height:100vh; overflow:hidden;
+    height: 100dvh;
+    height: calc(var(--vh, 1vh) * 100); /* JS fallback */
+    overflow:hidden;
     transition:background .35s,color .35s;
   }
 
@@ -84,7 +95,12 @@
   .theme-pill svg { width:14px; height:14px; stroke:currentColor; fill:none; stroke-width:1.8; }
 
   /* ── SHELL ── */
-  .chat-shell { display:flex; height:calc(100vh - 60px); position:relative; }
+  .chat-shell {
+    display:flex;
+    height: calc(100dvh - 60px);
+    height: calc(calc(var(--vh, 1vh) * 100) - 60px); /* JS fallback */
+    position:relative;
+  }
 
   /* ── CONTACT PANE ── */
   .pane-list {
@@ -408,16 +424,47 @@
 
   /* ── MOBILE ── */
   @media (max-width: 760px) {
-    .pane-list { position:absolute; inset:0; width:100%; z-index:5; }
+    .pane-list {
+      position:absolute; inset:0; width:100%; z-index:5;
+    }
     .pane-chat {
-      position:absolute; inset:0; width:100%;
+      position:absolute;
+      top:0; left:0; right:0; bottom:0;
+      width:100%;
       transform:translateX(100%); transition:transform .25s ease;
       background:var(--bg);
+      /* Critical: flex column so composer is always the last item
+         and the message area fills remaining space above it */
+      display:flex; flex-direction:column;
     }
     .chat-shell.show-chat .pane-chat { transform:translateX(0); z-index:10; }
     .chat-shell.show-chat .pane-list { display:none; }
     .back-to-list { display:flex !important; }
     .bubble { max-width:82%; }
+
+    /* Ensure message area scrolls properly and doesn't push composer off-screen */
+    .message-area {
+      flex:1;
+      overflow-y:auto;
+      -webkit-overflow-scrolling:touch;
+      /* Add bottom padding so last message isn't hidden behind composer */
+      padding-bottom:8px;
+    }
+
+    /* Composer: always pinned at bottom, never overflow hidden */
+    .composer {
+      flex-shrink:0;
+      /* Account for iOS safe area (home indicator bar) */
+      padding-bottom:max(10px, env(safe-area-inset-bottom));
+    }
+
+    .voice-record-bar {
+      flex-shrink:0;
+      padding-bottom:max(4px, env(safe-area-inset-bottom));
+    }
+
+    /* Ensure terminated banner doesn't push composer */
+    .terminated-banner { flex-shrink:0; }
   }
 </style>
 </head>
@@ -604,6 +651,21 @@
 </div>
 
 <script src="js/crypto.js?v=2"></script>
+<script>
+// Fix for mobile browser viewport height (address bar / bottom nav bar issue).
+// Sets --vh to the actual visible viewport height so 100dvh fallback works.
+(function() {
+  function setVh() {
+    document.documentElement.style.setProperty('--vh', window.innerHeight * 0.01 + 'px');
+  }
+  setVh();
+  window.addEventListener('resize', setVh);
+  // Also fire on orientationchange (iOS)
+  window.addEventListener('orientationchange', function() {
+    setTimeout(setVh, 200);
+  });
+})();
+</script>
 <script src="js/chat.js?v=3"></script>
 </body>
 </html>
