@@ -224,11 +224,35 @@ function snoozeReminder(reminderId, soundKey, cardEl) {
 async function registerSW() {
     if (!("serviceWorker" in navigator)) return;
     try {
-        await navigator.serviceWorker.register("/sw.js");
+        const reg = await navigator.serviceWorker.register("/sw.js");
         navigator.serviceWorker.addEventListener("message", e => {
-            if (e.data && e.data.type === "WAKE_CHECK") checkAlarms();
+            // SW fires this when it detects an alarm via its own ticker.
+            // Trigger the in-page alarm check so sound + card appear immediately.
+            if (e.data && (e.data.type === "WAKE_CHECK" || e.data.type === "DHAS_CHECK_NOW")) {
+                console.log("[DHAS] SW woke page — running alarm check");
+                checkAlarms();
+            }
+        });
+        // Push current reminders to SW so background notifications work
+        // even when the tab is minimized. Do this after SW is active.
+        reg.active && _pushRemindersToSW();
+        reg.addEventListener("updatefound", () => {
+            const newWorker = reg.installing;
+            newWorker?.addEventListener("statechange", () => {
+                if (newWorker.state === "activated") _pushRemindersToSW();
+            });
         });
     } catch (err) { console.warn("SW failed:", err); }
+}
+
+function _pushRemindersToSW() {
+    if (navigator.serviceWorker?.controller && remindersCache.length) {
+        navigator.serviceWorker.controller.postMessage({
+            type: "DHAS_SET_REMINDERS",
+            reminders: remindersCache
+        });
+        console.log(`[DHAS] Sent ${remindersCache.length} reminders to SW`);
+    }
 }
 
 async function requestNotifPermission() {
@@ -245,7 +269,30 @@ async function enableDHASNotifications() {
 }
 
 // ── Alarm engine ──────────────────────────────────────────────
-let lastFiredKey = {};
+// Fired-key store: use sessionStorage so it survives tab focus-loss but
+// resets on a fresh session (browser restart). This prevents double-fires
+// when the tab regains focus while still catching missed alarms from a
+// minimized tab (via the ±4 min catch-up window below).
+const FIRED_KEY_SS = "dhas_fired_keys";
+function _loadFiredKeys() {
+    try { return JSON.parse(sessionStorage.getItem(FIRED_KEY_SS) || "{}"); } catch { return {}; }
+}
+function _saveFiredKey(key) {
+    try {
+        const obj = _loadFiredKeys();
+        obj[key] = Date.now();
+        // Prune entries older than 10 minutes to keep storage small
+        const now = Date.now();
+        for (const k of Object.keys(obj)) {
+            if (now - obj[k] > 10 * 60 * 1000) delete obj[k];
+        }
+        sessionStorage.setItem(FIRED_KEY_SS, JSON.stringify(obj));
+    } catch {}
+}
+function _hasFiredKey(key) {
+    const obj = _loadFiredKeys();
+    return !!obj[key] && (Date.now() - obj[key]) < 5 * 60 * 1000;
+}
 
 function checkAlarms() {
     const reminders = getReminders();
@@ -253,25 +300,35 @@ function checkAlarms() {
     const now = new Date();
     const dow = now.getDay(), dom = now.getDate();
     const hh  = now.getHours(), mm = now.getMinutes();
+
+    // Push reminders to Service Worker so it can fire background notifications
+    // even when this tab is minimized or the screen is off.
     if (navigator.serviceWorker?.controller) {
         navigator.serviceWorker.controller.postMessage({
-            type:"CHECK_ALARMS", reminders, now:now.toISOString()
+            type: "DHAS_SET_REMINDERS", reminders
         });
     }
+
     reminders.forEach(r => {
         if (!shouldFireToday(r, dow, dom)) return;
         (r.times || []).forEach(t => {
             const [alarmH, alarmM] = to24(t.h, t.m, t.ampm);
             // Guard: skip if time parsing failed
             if (isNaN(alarmH) || isNaN(alarmM)) return;
+
             const nowMinutes   = hh * 60 + mm;
             const alarmMinutes = alarmH * 60 + alarmM;
-            // Widen to ±4 minutes to survive page load delays and slow ticks
-            
-            const key = `${r.id}-${t.label}-${alarmH}-${alarmM}`;
-            if (lastFiredKey[key]) return;
-            lastFiredKey[key] = true;
-            setTimeout(() => delete lastFiredKey[key], 5 * 60 * 1000);
+
+            // ── TIME MATCH: fire within a ±4 minute window ──
+            // The window catches alarms that the ticker missed while the tab
+            // was throttled (minimized, background, screen off).
+            // Upper bound is 0 (don't fire future alarms early).
+            const diff = nowMinutes - alarmMinutes;
+            if (diff < 0 || diff > 4) return;  // not yet, or too late
+
+            const key = `${r.id}-${t.label}-${alarmH}-${alarmM}-${now.toDateString()}`;
+            if (_hasFiredKey(key)) return;
+            _saveFiredKey(key);
             triggerAlarm(r, t);
         });
     });
@@ -433,23 +490,37 @@ function to24(h, m, ampm) {
     return [hour, parseInt(m, 10)];
 }
 
+let _alarmTickerInterval = null;
+
 function startAlarmTicker() {
-    // Align ticker to fire at the START of every minute (xx:yy:00)
-    // This guarantees checkAlarms() always runs when hh:mm changes,
-    // so an exact-minute match never gets skipped.
-    function scheduleNextMinuteTick() {
-        const now = new Date();
-        // ms remaining until the next whole minute + 200ms buffer
-        const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 200;
-        setTimeout(() => {
-            checkAlarms();
-            // After the first aligned tick, repeat every 60 s exactly
-            setInterval(checkAlarms, 60 * 1000);
-        }, msUntilNextMinute);
-    }
-    // Also do an immediate check in case we loaded right at alarm time
+    // Clear any existing interval so calling startAlarmTicker() twice
+    // (e.g. after a data reload) does not accumulate intervals.
+    if (_alarmTickerInterval) { clearInterval(_alarmTickerInterval); _alarmTickerInterval = null; }
+
+    // Immediate check on load — catches alarms that fired while the page was loading.
     setTimeout(checkAlarms, 500);
-    scheduleNextMinuteTick();
+
+    // Align to the START of the next whole minute so we always tick at xx:yy:00.
+    const now = new Date();
+    const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 200;
+    setTimeout(() => {
+        checkAlarms();
+        _alarmTickerInterval = setInterval(checkAlarms, 60 * 1000);
+    }, msUntilNextMinute);
+
+    // ── Page Visibility API ──────────────────────────────────────
+    // When the tab comes back from background/minimized, immediately
+    // check alarms. The ±4 min window in checkAlarms() catches any alarm
+    // that fired while the browser throttled the tab.
+    document.removeEventListener("visibilitychange", _onVisibilityChange);
+    document.addEventListener("visibilitychange", _onVisibilityChange);
+}
+
+function _onVisibilityChange() {
+    if (document.visibilityState === "visible") {
+        console.log("[DHAS] Tab became visible — running alarm catch-up check");
+        checkAlarms();
+    }
 }
 
 // ── Constants ─────────────────────────────────────────────────
@@ -663,6 +734,8 @@ async function loadRemindersFromServer() {
         if (data.success) {
             remindersCache = (data.data || []).map(normalizeReminder);
             await purgeExpiredReminders();
+            // Keep the Service Worker in sync so background notifications fire
+            _pushRemindersToSW();
         }
     } catch (err) { console.error("loadReminders error:", err); }
     displayReminders();
