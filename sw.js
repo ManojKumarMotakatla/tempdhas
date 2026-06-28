@@ -13,7 +13,7 @@
  *   dashboard.html and doctor_dashboard.html immediately on next load.
  */
 
-const CACHE_VERSION = "dhas-v12";
+const CACHE_VERSION = "dhas-v14";
 const API_CACHE     = "dhas-api-v8";
 const FONT_CACHE    = "dhas-fonts-v8";
 const CDN_CACHE     = "dhas-cdn-v8";
@@ -83,7 +83,9 @@ const DEV_RELOAD_PREFIXES = [
   "/chat.html",
   "/js/chat.js",
   "/js/crypto.js",
-  "/js/socket.io.min.js"
+  "/js/socket.io.min.js",
+  "/js/symptom.js",
+  "/js/reminder.js"
 ];
 
 function isAPIPath(pathname) {
@@ -310,12 +312,16 @@ function _sw_startTicker() {
 }
 
 self.addEventListener("message", event => {
+  // Page sends its reminders to SW so background notifications work
+  // even when the tab is minimized / screen off.
   if (event.data?.type === "DHAS_SET_REMINDERS") {
     _swReminders = event.data.reminders || [];
     console.log(`[SW] Loaded ${_swReminders.length} reminders for alarm checking`);
     _sw_startTicker();
   }
 
+  // Legacy: page asks SW to broadcast a wake-check to all clients.
+  // Now unused (page sends DHAS_SET_REMINDERS directly), kept for back-compat.
   if (event.data?.type === "CHECK_ALARMS") {
     self.clients.matchAll().then(clients =>
       clients.forEach(c => c.postMessage({ type: "WAKE_CHECK" }))
