@@ -25,7 +25,7 @@ app.options("/{*splat}", cors());
 
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max:      300,
+    max:5000,
     standardHeaders: true,
     legacyHeaders:   false,
     message: { success: false, message: "Too many requests. Please wait a few minutes." }
@@ -33,7 +33,7 @@ const globalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max:      15,
+    max: 500,
     standardHeaders: true,
     legacyHeaders:   false,
     message: { success: false, message: "Too many login attempts. Please wait 15 minutes." }
