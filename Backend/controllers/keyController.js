@@ -80,5 +80,42 @@ const getPartnerPublicKey = async (req, res) => {
         res.status(500).json({ success: false, message: "Failed to load partner key." });
     }
 };
+/* ── POST /keys/backup — store this account's encrypted private key ── */
+const saveKeyBackup = async (req, res) => {
+    const { encrypted_private_key, key_iv, key_salt, public_key_jwk } = req.body;
+    if (!encrypted_private_key || !key_iv || !key_salt || !public_key_jwk) {
+        return res.status(400).json({ success: false, message: "Missing backup fields." });
+    }
+    try {
+        const table = req.role === "doctor" ? "doctors" : "users";
+        const id    = req.role === "doctor" ? req.doctorId : req.userId;
+        await db.promise().query(
+            `UPDATE ${table} SET encrypted_private_key = ?, key_iv = ?, key_salt = ?, public_key = ? WHERE id = ?`,
+            [encrypted_private_key, key_iv, key_salt, public_key_jwk, id]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        console.error("saveKeyBackup error:", err.message);
+        res.status(500).json({ success: false, message: "Failed to save key backup." });
+    }
+};
 
-module.exports = { saveMyPublicKey, getMyPublicKey, getPartnerPublicKey };
+/* ── GET /keys/backup — fetch this account's encrypted private key ── */
+const getKeyBackup = async (req, res) => {
+    try {
+        const table = req.role === "doctor" ? "doctors" : "users";
+        const id    = req.role === "doctor" ? req.doctorId : req.userId;
+        const [rows] = await db.promise().query(
+            `SELECT encrypted_private_key, key_iv, key_salt, public_key AS public_key_jwk
+             FROM ${table} WHERE id = ?`, [id]
+        );
+        const row = rows[0];
+        if (!row || !row.encrypted_private_key) return res.json({ success: true, backup: null });
+        res.json({ success: true, backup: row });
+    } catch (err) {
+        console.error("getKeyBackup error:", err.message);
+        res.status(500).json({ success: false, message: "Failed to load key backup." });
+    }
+};
+
+module.exports = { saveMyPublicKey, getMyPublicKey, getPartnerPublicKey, saveKeyBackup, getKeyBackup };
