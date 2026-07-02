@@ -235,10 +235,79 @@ const DHAS_CRYPTO = (() => {
     }
   }
 
+  // ── Password-based wrapping (for server-side key backup) ──
+async function deriveWrappingKey(password, saltB64) {
+  const salt = saltB64
+    ? new Uint8Array(b642ab(saltB64))
+    : crypto.getRandomValues(new Uint8Array(16));
+  const baseKey = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]
+  );
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
+    baseKey, ALGO_AES, false, ["encrypt", "decrypt"]
+  );
+  return { key, saltB64: ab2b64(salt.buffer) };
+}
+
+async function wrapPrivateKeyJwk(privateKeyJwk, wrappingKey) {
+  const iv   = crypto.getRandomValues(new Uint8Array(12));
+  const data = new TextEncoder().encode(JSON.stringify(privateKeyJwk));
+  const ct   = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, wrappingKey, data);
+  return { wrapped: ab2b64(ct), iv: ab2b64(iv.buffer) };
+}
+
+async function unwrapPrivateKeyJwk(wrappedB64, ivB64, wrappingKey) {
+  const iv = new Uint8Array(b642ab(ivB64));
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, wrappingKey, b642ab(wrappedB64));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+// ── Called at LOGIN (needs the plaintext password briefly) ──
+// Restores the same key pair on any device, or creates + backs up
+// a new one if this is the first login ever.
+async function initWithPassword(apiBase, token, password) {
+  if (!password) { await init(apiBase, token); return; } // Google users fallback
+
+  try {
+    const res  = await fetch(apiBase + "/keys/backup", {
+      headers: { Authorization: "Bearer " + token }
+    });
+    const data = await res.json();
+
+    if (data.success && data.backup && data.backup.encrypted_private_key) {
+      const { key } = await deriveWrappingKey(password, data.backup.key_salt);
+      const privJwk  = await unwrapPrivateKeyJwk(data.backup.encrypted_private_key, data.backup.key_iv, key);
+      const pubJwk   = JSON.parse(data.backup.public_key_jwk);
+      localStorage.setItem(LS_KEY_PAIR, JSON.stringify({ publicKeyJwk: pubJwk, privateKeyJwk: privJwk }));
+    } else {
+      const stored = await generateAndStoreKeyPair();
+      const { key, saltB64 } = await deriveWrappingKey(password);
+      const { wrapped, iv }  = await wrapPrivateKeyJwk(stored.privateKeyJwk, key);
+      await fetch(apiBase + "/keys/backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: JSON.stringify({
+          encrypted_private_key: wrapped,
+          key_iv: iv,
+          key_salt: saltB64,
+          public_key_jwk: JSON.stringify(stored.publicKeyJwk)
+        })
+      });
+    }
+    await uploadMyPublicKey(apiBase, token);
+    console.log("[DHAS Crypto] E2E ready (restored/backed up).");
+  } catch (err) {
+    console.warn("[DHAS Crypto] initWithPassword failed, falling back:", err.message);
+    await init(apiBase, token);
+  }
+}
+
   return {
     init,
     getOrDeriveRoomKey,
     clearRoomKeyCache,
+     initWithPassword,
     encryptMessage,
     decryptMessage,
     encryptFile,
