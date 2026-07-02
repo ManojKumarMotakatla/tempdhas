@@ -18,5 +18,10 @@ router.use(identifyChatUser);
 router.post("/me",               saveMyPublicKey);
 router.get( "/me",                getMyPublicKey);
 router.get( "/partner/:room_id",  getPartnerPublicKey);
+router.post("/backup",            saveKeyBackup);   
+router.get( "/backup",            getKeyBackup);    
+
+
+
 
 module.exports = router;
