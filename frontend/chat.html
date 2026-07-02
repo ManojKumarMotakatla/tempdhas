@@ -50,19 +50,20 @@
      the mobile browser's address bar / nav bar is visible — this is what
      prevents the composer from being hidden under the browser chrome.
      Falls back to svh, then 100vh for older browsers. */
-  :root {
+:root {
     --vh: 1vh;  /* JS-updated fallback for browsers without dvh support */
-  }
+}
 
-  body {
+body {
     font-family:'DM Sans',sans-serif;
     background:var(--bg); color:var(--text);
-    height: 100dvh;
-    height: calc(var(--vh, 1vh) * 100); /* JS fallback */
+    height: calc(var(--vh, 1vh) * 100); /* fallback for old browsers */
     overflow:hidden;
     transition:background .35s,color .35s;
-  }
-
+}
+@supports (height: 100dvh) {
+    body { height: 100dvh; }
+}
   /* ── TOPBAR ── */
   .topbar {
     height:60px; display:flex; align-items:center;
@@ -95,12 +96,14 @@
   .theme-pill svg { width:14px; height:14px; stroke:currentColor; fill:none; stroke-width:1.8; }
 
   /* ── SHELL ── */
-  .chat-shell {
+.chat-shell {
     display:flex;
-    height: calc(100dvh - 60px);
-    height: calc(calc(var(--vh, 1vh) * 100) - 60px); /* JS fallback */
+    height: calc(calc(var(--vh, 1vh) * 100) - 60px); /* fallback for old browsers */
     position:relative;
-  }
+}
+@supports (height: 100dvh) {
+    .chat-shell { height: calc(100dvh - 60px); }
+}
 
   /* ── CONTACT PANE ── */
   .pane-list {
@@ -654,16 +657,31 @@
 <script>
 // Fix for mobile browser viewport height (address bar / bottom nav bar issue).
 // Sets --vh to the actual visible viewport height so 100dvh fallback works.
+<script>
 (function() {
   function setVh() {
-    document.documentElement.style.setProperty('--vh', window.innerHeight * 0.01 + 'px');
+    var h = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    document.documentElement.style.setProperty('--vh', h * 0.01 + 'px');
   }
   setVh();
-  window.addEventListener('resize', setVh);
-  // Also fire on orientationchange (iOS)
-  window.addEventListener('orientationchange', function() {
-    setTimeout(setVh, 200);
+
+  ['load', 'pageshow'].forEach(function (evt) {
+    window.addEventListener(evt, setVh);
   });
+  [50, 150, 300, 600, 1000].forEach(function (delay) {
+    setTimeout(setVh, delay);
+  });
+
+  window.addEventListener('resize', setVh);
+  window.addEventListener('orientationchange', function () {
+    setTimeout(setVh, 200);
+    setTimeout(setVh, 500);
+  });
+
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', setVh);
+    window.visualViewport.addEventListener('scroll', setVh);
+  }
 })();
 </script>
 <script src="js/chat.js?v=3"></script>
