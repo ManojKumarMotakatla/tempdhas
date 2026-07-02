@@ -12,6 +12,26 @@
 //         used alert() and silently overwrote the showToast
 //         version defined in steps.html. The good version in
 //         steps.html now remains in effect at runtime.
+//
+// FIX 3 (NEW): Added the Google Fit integration hooks that
+//         steps.html actually calls but that never existed
+//         here — window.DHAS_setStepsFromGoogleFit() and
+//         window.DHAS_clearGoogleFit(). Without these, every
+//         "sync" from steps.html silently did nothing: the
+//         accelerometer kept running untouched in the
+//         background, incrementing on top of (and independent
+//         from) whatever Google Fit reported, which is why the
+//         on-screen count looked "frozen per session" while the
+//         real Google Fit total kept climbing invisibly.
+//
+//         When Google Fit is the active source:
+//           - the accelerometer listener is detached (no more
+//             double counting)
+//           - `steps` is driven entirely by Google Fit's number
+//           - the source is persisted in localStorage so a page
+//             reload doesn't silently resume the accelerometer
+//         Calling DHAS_clearGoogleFit() (disconnect) resumes
+//         local accelerometer tracking from the current count.
 // ============================================================
 
 const DAILY_GOAL   = 10000;
@@ -41,6 +61,11 @@ let briskSteps = 0;
 let weekData   = [0, 0, 0, 0, 0, 0, 0];
 let todayIdx   = new Date().getDay();
 
+// NEW: which source currently "owns" the step count.
+// true  = Google Fit is authoritative; accelerometer is paused.
+// false = on-device accelerometer is authoritative (default).
+let googleFitConnected = false;
+
 // Detection internals
 let filteredMag   = 0;
 let lastPeak      = 0;
@@ -54,6 +79,7 @@ let consistentSwingCount = 0;
 let previousFilteredMag = 0;
 
 let stillTimer = null;
+let motionListenerAttached = false; // NEW: avoid double-attaching listeners
 
 // ── Midnight reset ────────────────────────────────────────────
 function scheduleMidnightReset() {
@@ -81,9 +107,18 @@ function performMidnightReset() {
 
   pendingSteps  = 0;
   walkConfirmed = false;
+
+  // NEW: a new day always starts back on the accelerometer. If the
+  // person is still actually connected to Google Fit, steps.html's
+  // own load-time silent-reconnect will call DHAS_setStepsFromGoogleFit()
+  // again momentarily and re-pause the sensor — this just guarantees
+  // we never sit "stuck" on yesterday's Google Fit state indefinitely.
+  googleFitConnected = false;
+
   save();
   updateDisplay();
   setPill("still", "Standing still");
+  startSensor();
 }
 
 // ── Load saved data ───────────────────────────────────────────
@@ -94,6 +129,11 @@ function performMidnightReset() {
     if (saved.date === today) {
       steps      = saved.steps      || 0;
       briskSteps = saved.briskSteps || 0;
+      // NEW: remember which source produced today's count so we don't
+      // resume the accelerometer under a Google Fit total on reload.
+      if (saved.source === "googlefit") {
+        googleFitConnected = true;
+      }
     }
     weekData           = saved.weekData || [0, 0, 0, 0, 0, 0, 0];
     weekData[todayIdx] = steps;
@@ -105,7 +145,9 @@ function save() {
   try {
     localStorage.setItem("dhas_steps_v4", JSON.stringify({
       date: new Date().toDateString(),
-      steps, briskSteps, weekData
+      steps, briskSteps, weekData,
+      // NEW: persist the active source
+      source: googleFitConnected ? "googlefit" : "sensor"
     }));
   } catch (e) {}
 }
@@ -129,6 +171,11 @@ function markWalking() {
 
 // ── Core accelerometer handler ────────────────────────────────
 function onMotion(e) {
+  // NEW: while Google Fit owns the count, ignore all local motion
+  // events entirely. This is what actually stops the double-counting —
+  // previously this function ran unconditionally forever.
+  if (googleFitConnected) return;
+
   const a = e.accelerationIncludingGravity;
   if (!a || a.x == null) return;
 
@@ -210,8 +257,14 @@ function onMotion(e) {
   }
 }
 
-// ── Sensor start ──────────────────────────────────────────────
+// ── Sensor start / stop ─────────────────────────────────────────
 function startSensor() {
+  // NEW: never start the accelerometer while Google Fit owns the count.
+  if (googleFitConnected) {
+    setPill("still", "Synced from Google Fit");
+    return;
+  }
+
   if (
     typeof DeviceMotionEvent !== "undefined" &&
     typeof DeviceMotionEvent.requestPermission === "function"
@@ -222,6 +275,7 @@ function startSensor() {
         .then(r => {
           if (r === "granted") {
             window.addEventListener("devicemotion", onMotion);
+            motionListenerAttached = true;
             setPill("still", "Standing still");
           } else {
             setPill("waiting", "Motion permission denied");
@@ -236,11 +290,23 @@ function startSensor() {
   } else if (typeof DeviceMotionEvent !== "undefined") {
     // Android / Chrome — starts immediately, no permission needed
     window.addEventListener("devicemotion", onMotion);
+    motionListenerAttached = true;
     setPill("still", "Standing still");
 
   } else {
     setPill("waiting", "No motion sensor on this device");
   }
+}
+
+// NEW: cleanly detach the accelerometer listener so it can never fire
+// again while Google Fit is connected (belt-and-braces on top of the
+// googleFitConnected guard inside onMotion itself).
+function stopSensor() {
+  if (motionListenerAttached) {
+    window.removeEventListener("devicemotion", onMotion);
+    motionListenerAttached = false;
+  }
+  clearTimeout(stillTimer);
 }
 
 // ── Display update ────────────────────────────────────────────
@@ -339,15 +405,62 @@ function renderWeekChart() {
   });
 }
 
-// NOTE: connectGoogleFit() is intentionally NOT defined here.
-// It is defined in steps.html (inline script) where it correctly
-// uses showToast() for user feedback. Defining it here would
-// overwrite that version with an alert()-based fallback since
-// this external script is loaded after the inline script.
+// ══════════════════════════════════════════════════════════════
+// NEW: Google Fit integration hooks
+//
+// steps.html calls these two functions directly. Before this fix
+// neither existed, so `if (window.DHAS_setStepsFromGoogleFit)` in
+// steps.html was always false and the "sync" was a complete no-op —
+// the accelerometer never even knew Google Fit existed.
+// ══════════════════════════════════════════════════════════════
+
+// Called by steps.html with the TOTAL step count for today from the
+// Google Fit aggregate API (already summed across all points/datasets).
+window.DHAS_setStepsFromGoogleFit = function (googleSteps) {
+  googleFitConnected = true;
+
+  // Stop the accelerometer FIRST so no race can add a local step
+  // between setting `steps` below and the listener actually detaching.
+  stopSensor();
+
+  steps = Math.max(0, parseInt(googleSteps, 10) || 0);
+
+  // We don't get a brisk/slow split from the Fit aggregate call, so
+  // just make sure the previously-tracked brisk count never exceeds
+  // the new total (avoids a >100% brisk bar).
+  briskSteps = Math.min(briskSteps, steps);
+
+  save();
+  updateDisplay();
+  setPill("still", "Synced from Google Fit");
+
+  const fitStatus = document.getElementById("fitStatus");
+  if (fitStatus) {
+    fitStatus.textContent = "Connected to Google Fit";
+    fitStatus.style.display = "block";
+  }
+};
+
+// Called by steps.html when the person disconnects Google Fit.
+// Resumes local accelerometer tracking from the current total.
+window.DHAS_clearGoogleFit = function () {
+  googleFitConnected = false;
+  save();
+  setPill("still", "Standing still");
+  startSensor();
+};
+
+// Lets steps.html check current state without duplicating the flag.
+window.DHAS_isGoogleFitConnected = function () {
+  return googleFitConnected;
+};
 
 // ── Init ─────────────────────────────────────────────────────
 window.onload = function () {
   updateDisplay();
+  // NEW: only the accelerometer path checks googleFitConnected internally,
+  // so this call is safe either way — it will no-op if Fit already owns
+  // the count for today (loaded from localStorage in loadSaved() above).
   startSensor();
   scheduleMidnightReset();
 };
