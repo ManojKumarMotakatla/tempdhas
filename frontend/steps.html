@@ -319,208 +319,263 @@
   <div id="dhasToast" role="status" aria-live="polite"></div>
 
   <script>
-    // ── In-page toast ─────────────────────────────────────────
-    let _toastTimer = null;
-    function showToast(text, type = "success", duration = 4500) {
-      const t = document.getElementById("dhasToast");
-      if (!t) return;
-      const icon = type === "success" ? "ti-circle-check" : "ti-alert-circle";
-      t.className = type;
-      t.innerHTML = `<i class="ti ${icon}" style="font-size:16px;flex-shrink:0;margin-top:1px" aria-hidden="true"></i><span>${text}</span><button class="toast-dismiss" onclick="this.parentElement.style.display='none'" aria-label="Dismiss"><i class="ti ti-x"></i></button>`;
-      t.style.display = "flex";
-      if (_toastTimer) clearTimeout(_toastTimer);
-      _toastTimer = setTimeout(() => { t.style.display = "none"; }, duration);
-    }
+  // ── In-page toast ─────────────────────────────────────────
+  let _toastTimer = null;
+  function showToast(text, type = "success", duration = 4500) {
+    const t = document.getElementById("dhasToast");
+    if (!t) return;
+    const icon = type === "success" ? "ti-circle-check" : "ti-alert-circle";
+    t.className = type;
+    t.innerHTML = `<i class="ti ${icon}" style="font-size:16px;flex-shrink:0;margin-top:1px" aria-hidden="true"></i><span>${text}</span><button class="toast-dismiss" onclick="this.parentElement.style.display='none'" aria-label="Dismiss"><i class="ti ti-x"></i></button>`;
+    t.style.display = "flex";
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { t.style.display = "none"; }, duration);
+  }
 
-    // ══════════════════════════════════════════════════════════
-    // GOOGLE FIT INTEGRATION
-    //
-    // FIX 1 (persistence): previously we stored only the raw access
-    // token, which nothing ever read back — every page load started
-    // a brand new interactive OAuth popup, and the token was thrown
-    // away when the tab closed. Access tokens also expire in ~1 hour
-    // regardless. Now we store a small "connection record"
-    // { connected: true, expiresAt } and, on load, if it says we're
-    // connected, we silently request a fresh token (prompt: "") —
-    // Google will NOT show a popup if consent was already granted,
-    // it just re-issues a token behind the scenes.
-    //
-    // FIX 2 (undercounting): the aggregate response can contain
-    // multiple points across multiple datasets/buckets (common when
-    // more than one app writes step data). The old code only read
-    // bucket[0].dataset[0].point[0] — the very first point — and
-    // silently dropped everything else. We now sum every point in
-    // every dataset in every bucket.
-    //
-    // FIX 3 (double counting): the actual sync into the UI now goes
-    // through window.DHAS_setStepsFromGoogleFit(), defined in
-    // steps.js, which also stops the on-device accelerometer. Before
-    // this, that hook didn't exist, so the accelerometer kept running
-    // forever in parallel with Google Fit, and the two counts fought
-    // each other.
-    // ══════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════
+  // GOOGLE FIT INTEGRATION — v2
+  //
+  // FIX 1 (kept asking to reconnect): the connect card is now driven
+  //   by a single updateGfitUI() state function instead of only being
+  //   hidden on success. On load, if we have a saved connection we
+  //   show a "Connecting…" state immediately (not the raw connect
+  //   card) while silent reconnect runs, and only fall back to the
+  //   connect card if that genuinely fails.
+  //
+  // FIX 2 (frozen at first-connect value): added a 30s poll timer
+  //   (startGfitPolling) that keeps calling the aggregate API and
+  //   pushing fresh totals into DHAS_setStepsFromGoogleFit() the
+  //   whole time you're connected — not just once. The access token
+  //   is refreshed silently (no popup) a minute before it expires so
+  //   the polling never silently stops working after ~1 hour.
+  //
+  // FIX 3 (undercount): still sums every point in every dataset in
+  //   every bucket rather than only bucket[0].dataset[0].point[0].
+  //
+  // NEW: real Disconnect button — clears the token, revokes it with
+  //   Google, stops polling, and resumes the on-device accelerometer.
+  // ══════════════════════════════════════════════════════════
 
-    const GFIT_CLIENT_ID   = "935050379586-3vj8chtqv922uqmqurgknmtdseh0vlpv.apps.googleusercontent.com";
-    const GFIT_SCOPE       = "https://www.googleapis.com/auth/fitness.activity.read";
-    const GFIT_STORAGE_KEY = "dhas_googlefit_connection";
+  const GFIT_CLIENT_ID   = "935050379586-3vj8chtqv922uqmqurgknmtdseh0vlpv.apps.googleusercontent.com";
+  const GFIT_SCOPE       = "https://www.googleapis.com/auth/fitness.activity.read";
+  const GFIT_STORAGE_KEY = "dhas_googlefit_connection";
+  const GFIT_POLL_MS     = 30 * 1000; // ── requested: refresh every 30s
 
-    function gfitLoadConnection() {
-      try {
-        return JSON.parse(localStorage.getItem(GFIT_STORAGE_KEY) || "null");
-      } catch (e) {
-        return null;
-      }
-    }
+  let gfitAccessToken    = null;
+  let gfitTokenExpiresAt = 0;
+  let gfitPollTimer      = null;
 
-    function gfitSaveConnection(expiresInSeconds) {
-      const record = {
-        connected: true,
-        // small safety margin so we refresh a little before actual expiry
-        expiresAt: Date.now() + (Math.max(60, expiresInSeconds - 60) * 1000)
-      };
-      try { localStorage.setItem(GFIT_STORAGE_KEY, JSON.stringify(record)); } catch (e) {}
-    }
+  function gfitLoadConnection() {
+    try { return JSON.parse(localStorage.getItem(GFIT_STORAGE_KEY) || "null"); }
+    catch (e) { return null; }
+  }
+  function gfitSaveConnection() {
+    try { localStorage.setItem(GFIT_STORAGE_KEY, JSON.stringify({ connected: true })); } catch (e) {}
+  }
+  function gfitClearConnection() {
+    try { localStorage.removeItem(GFIT_STORAGE_KEY); } catch (e) {}
+  }
 
-    function gfitClearConnection() {
-      try { localStorage.removeItem(GFIT_STORAGE_KEY); } catch (e) {}
-    }
-
-    // Sums every step-count point across every dataset in every bucket.
-    // Fixes the "only reads point[0]" undercount bug.
-    function gfitSumSteps(data) {
-      let total = 0;
-      if (!data || !Array.isArray(data.bucket)) return 0;
-
-      data.bucket.forEach(bucket => {
-        if (!Array.isArray(bucket.dataset)) return;
-        bucket.dataset.forEach(dataset => {
-          if (!Array.isArray(dataset.point)) return;
-          dataset.point.forEach(point => {
-            if (Array.isArray(point.value) && point.value.length > 0) {
-              total += point.value[0].intVal || 0;
-            }
-          });
-        });
-      });
-
-      return total;
-    }
-
-    async function gfitFetchTodaySteps(accessToken) {
-      const res = await fetch(
-        "https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate",
-        {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${accessToken}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            aggregateBy: [{ dataTypeName: "com.google.step_count.delta" }],
-            bucketByTime: { durationMillis: 86400000 },
-            startTimeMillis: new Date().setHours(0, 0, 0, 0),
-            endTimeMillis: Date.now()
-          })
-        }
-      );
-      const data = await res.json();
-      return gfitSumSteps(data); // FIX 2: sum, not point[0] only
-    }
-
-    function gfitApplySync(accessToken, { silent } = { silent: false }) {
-      return gfitFetchTodaySteps(accessToken)
-        .then(totalSteps => {
-          // FIX 3: this actually exists now (defined in steps.js) and
-          // is what stops the accelerometer from double-counting.
-          if (window.DHAS_setStepsFromGoogleFit) {
-            window.DHAS_setStepsFromGoogleFit(totalSteps);
-          }
-          document.getElementById("fitConnectCard").style.display = "none";
-          const fitStatus = document.getElementById("fitStatus");
-          if (fitStatus) fitStatus.style.display = "block";
-          if (!silent) {
-            showToast(`Synced ${totalSteps.toLocaleString()} steps from Google Fit.`, "success");
-          }
-        })
-        .catch(err => {
-          console.error(err);
-          if (!silent) {
-            showToast("Unable to sync Google Fit data. Please try again.", "error");
+  // Sums every step-count point across every dataset in every bucket.
+  function gfitSumSteps(data) {
+    let total = 0;
+    if (!data || !Array.isArray(data.bucket)) return 0;
+    data.bucket.forEach(bucket => {
+      if (!Array.isArray(bucket.dataset)) return;
+      bucket.dataset.forEach(dataset => {
+        if (!Array.isArray(dataset.point)) return;
+        dataset.point.forEach(point => {
+          if (Array.isArray(point.value) && point.value.length > 0) {
+            total += point.value[0].intVal || 0;
           }
         });
-    }
-
-    // Interactive connect (first-time or manual re-connect)
-    function connectGoogleFit() {
-      const client = google.accounts.oauth2.initTokenClient({
-        client_id: GFIT_CLIENT_ID,
-        scope: GFIT_SCOPE,
-        callback: (response) => {
-          if (!response || !response.access_token) {
-            showToast("Google Fit connection was cancelled or failed.", "error");
-            return;
-          }
-          gfitSaveConnection(response.expires_in || 3600);
-          gfitApplySync(response.access_token, { silent: false });
-        }
       });
-      client.requestAccessToken();
-    }
-
-    // Silent re-auth on page load — only fires a popup-free token
-    // refresh if we previously connected AND that connection hasn't
-    // expired. If Google can't silently reissue a token (e.g. the
-    // person revoked access elsewhere), it just fails quietly and we
-    // fall back to the accelerometer, same as a first-time visitor.
-    function gfitTrySilentReconnect() {
-      const record = gfitLoadConnection();
-      if (!record || !record.connected) return;
-
-      if (typeof google === "undefined" || !google.accounts) return;
-
-      const client = google.accounts.oauth2.initTokenClient({
-        client_id: GFIT_CLIENT_ID,
-        scope: GFIT_SCOPE,
-        callback: (response) => {
-          if (!response || !response.access_token) {
-            // Consent was revoked / truly expired — clear stale state
-            // and let the person reconnect manually via the card.
-            gfitClearConnection();
-            return;
-          }
-          gfitSaveConnection(response.expires_in || 3600);
-          gfitApplySync(response.access_token, { silent: true });
-        }
-      });
-
-      // prompt: "" asks Google Identity Services to skip the UI
-      // entirely if the user already granted this scope.
-      client.requestAccessToken({ prompt: "" });
-    }
-
-    // Manual disconnect (optional, wired to #fitDisconnectBtn if present)
-    function disconnectGoogleFit() {
-      gfitClearConnection();
-      if (window.DHAS_clearGoogleFit) {
-        window.DHAS_clearGoogleFit();
-      }
-      document.getElementById("fitConnectCard").style.display = "block";
-      const fitStatus = document.getElementById("fitStatus");
-      if (fitStatus) fitStatus.style.display = "none";
-      showToast("Disconnected from Google Fit. Switched back to on-device tracking.", "success");
-    }
-
-    // Kick off silent reconnect once the Google Identity script and
-    // our own steps.js (which defines the DHAS_* hooks) have loaded.
-    window.addEventListener("load", () => {
-      // steps.js sets window.onload itself for its own init, so give
-      // it a tick to run first before we potentially call its hooks.
-      setTimeout(gfitTrySilentReconnect, 300);
     });
-  </script>
-  <script src="js/steps.js"></script>
-</body>
-</html>
+    return total;
+  }
+
+  async function gfitFetchTodaySteps(accessToken) {
+    const res = await fetch(
+      "https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          aggregateBy: [{ dataTypeName: "com.google.step_count.delta" }],
+          bucketByTime: { durationMillis: 86400000 },
+          startTimeMillis: new Date().setHours(0, 0, 0, 0),
+          endTimeMillis: Date.now()
+        })
+      }
+    );
+    if (!res.ok) throw new Error("Fit API error " + res.status);
+    const data = await res.json();
+    return gfitSumSteps(data);
+  }
+
+  // Wraps GIS's token flow in a Promise. prompt="" = silent (no popup,
+  // fails quietly if not previously granted). prompt=undefined = normal
+  // interactive flow (needs a user gesture, e.g. a click handler).
+  function gfitRequestToken(prompt) {
+    return new Promise((resolve) => {
+      if (typeof google === "undefined" || !google.accounts) { resolve(null); return; }
+      try {
+        const client = google.accounts.oauth2.initTokenClient({
+          client_id: GFIT_CLIENT_ID,
+          scope: GFIT_SCOPE,
+          callback: (response) => {
+            if (!response || !response.access_token) { resolve(null); return; }
+            resolve(response);
+          },
+          error_callback: () => resolve(null)
+        });
+        client.requestAccessToken(prompt === undefined ? {} : { prompt });
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
+  // Returns a valid access token, silently refreshing it if it's
+  // missing or about to expire (<60s left) — this is what keeps the
+  // 30s polling alive for hours without ever prompting the user again.
+  async function gfitGetValidToken() {
+    const now = Date.now();
+    if (gfitAccessToken && now < gfitTokenExpiresAt - 60000) {
+      return gfitAccessToken;
+    }
+    const response = await gfitRequestToken("");
+    if (!response) return null;
+    gfitAccessToken    = response.access_token;
+    gfitTokenExpiresAt = now + (response.expires_in || 3600) * 1000;
+    gfitSaveConnection();
+    return gfitAccessToken;
+  }
+
+  async function gfitApplySync(accessToken, { silent } = { silent: false }) {
+    try {
+      const totalSteps = await gfitFetchTodaySteps(accessToken);
+      if (window.DHAS_setStepsFromGoogleFit) {
+        window.DHAS_setStepsFromGoogleFit(totalSteps);
+      }
+      const fitStatus = document.getElementById("fitStatus");
+      if (fitStatus) {
+        const timeStr = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+        fitStatus.textContent = `Connected to Google Fit · last synced ${timeStr}`;
+      }
+      if (!silent) {
+        showToast(`Synced ${totalSteps.toLocaleString()} steps from Google Fit.`, "success");
+      }
+      return true;
+    } catch (err) {
+      console.error(err);
+      if (!silent) showToast("Unable to sync Google Fit data. Please try again.", "error");
+      return false;
+    }
+  }
+
+  function updateGfitUI(connected, connecting) {
+    const card           = document.getElementById("fitConnectCard");
+    const fitStatus       = document.getElementById("fitStatus");
+    const disconnectBtn  = document.getElementById("fitDisconnectBtn");
+    if (connected) {
+      if (card) card.style.display = "none";
+      if (fitStatus) {
+        fitStatus.style.display = "block";
+        if (connecting) fitStatus.textContent = "Connecting to Google Fit…";
+      }
+      if (disconnectBtn) disconnectBtn.style.display = "inline-flex";
+    } else {
+      if (card) card.style.display = "block";
+      if (fitStatus) fitStatus.style.display = "none";
+      if (disconnectBtn) disconnectBtn.style.display = "none";
+    }
+  }
+
+  // ── 30-second auto re-sync while connected ─────────────────
+  function startGfitPolling() {
+    stopGfitPolling();
+    gfitPollTimer = setInterval(async () => {
+      const token = await gfitGetValidToken();
+      if (!token) {
+        // Access was revoked elsewhere / truly expired — fall back cleanly.
+        stopGfitPolling();
+        gfitClearConnection();
+        updateGfitUI(false);
+        return;
+      }
+      gfitApplySync(token, { silent: true });
+    }, GFIT_POLL_MS);
+  }
+  function stopGfitPolling() {
+    if (gfitPollTimer) { clearInterval(gfitPollTimer); gfitPollTimer = null; }
+  }
+
+  // ── Manual connect (button click — has user gesture) ───────
+  async function connectGoogleFit() {
+    const response = await gfitRequestToken(undefined);
+    if (!response) {
+      showToast("Google Fit connection was cancelled or failed.", "error");
+      return;
+    }
+    gfitAccessToken    = response.access_token;
+    gfitTokenExpiresAt = Date.now() + (response.expires_in || 3600) * 1000;
+    gfitSaveConnection();
+    updateGfitUI(true, true);
+    const ok = await gfitApplySync(gfitAccessToken, { silent: false });
+    if (ok) {
+      startGfitPolling();
+      updateGfitUI(true);
+    } else {
+      gfitClearConnection();
+      updateGfitUI(false);
+    }
+  }
+
+  // ── Silent reconnect on page load ───────────────────────────
+  async function gfitTrySilentReconnect() {
+    const record = gfitLoadConnection();
+    if (!record || !record.connected) { updateGfitUI(false); return; }
+
+    updateGfitUI(true, true); // show "Connecting…" instead of the connect card
+    const token = await gfitGetValidToken();
+    if (!token) {
+      gfitClearConnection();
+      updateGfitUI(false);
+      return;
+    }
+    const ok = await gfitApplySync(token, { silent: true });
+    if (ok) {
+      startGfitPolling();
+      updateGfitUI(true);
+    } else {
+      gfitClearConnection();
+      updateGfitUI(false);
+    }
+  }
+
+  // ── Disconnect ───────────────────────────────────────────────
+  function disconnectGoogleFit() {
+    stopGfitPolling();
+    if (gfitAccessToken && typeof google !== "undefined" && google.accounts && google.accounts.oauth2.revoke) {
+      try { google.accounts.oauth2.revoke(gfitAccessToken, () => {}); } catch (e) {}
+    }
+    gfitAccessToken    = null;
+    gfitTokenExpiresAt = 0;
+    gfitClearConnection();
+    if (window.DHAS_clearGoogleFit) window.DHAS_clearGoogleFit();
+    updateGfitUI(false);
+    showToast("Disconnected from Google Fit. Switched back to on-device tracking.", "success");
+  }
+
+  // Kick off silent reconnect once GIS + steps.js hooks are ready.
+  window.addEventListener("load", () => {
+    setTimeout(gfitTrySilentReconnect, 300);
+  });
+</script>
   <script src="js/steps.js"></script>
 </body>
 </html>
