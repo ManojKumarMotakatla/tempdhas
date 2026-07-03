@@ -4,7 +4,7 @@
 // Mount at app.use("/keys", keyRoutes) — see server.js.
 // Reuses identifyChatUser (already handles BOTH patient and
 // doctor JWTs) so one route file serves both roles, same pattern
-// as chatRoutes.js.abcd
+// as chatRoutes.js.
 // ============================================================
 
 const express = require("express");
@@ -18,10 +18,5 @@ router.use(identifyChatUser);
 router.post("/me",               saveMyPublicKey);
 router.get( "/me",                getMyPublicKey);
 router.get( "/partner/:room_id",  getPartnerPublicKey);
-router.post("/backup",            saveKeyBackup);   
-router.get( "/backup",            getKeyBackup);    
-
-
-
 
 module.exports = router;
