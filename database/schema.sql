@@ -312,13 +312,17 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     room_id        INT          NOT NULL,
     sender_type    ENUM('doctor','patient') NOT NULL,
     sender_id      INT          NOT NULL,
-    message_type   ENUM('text','image','pdf','symptom_share','report_share') NOT NULL DEFAULT 'text',
-    content        TEXT         NULL,          -- plain text body
+    message_type   ENUM('text','image','pdf','voice','symptom_share','report_share') NOT NULL DEFAULT 'text',
+    content        TEXT         NULL,          -- plain text body (or base64 ciphertext when is_encrypted=1)
     file_name      VARCHAR(255) NULL,          -- original filename (attachments)
     file_size      VARCHAR(20)  NULL,
     file_mime      VARCHAR(80)  NULL,
-    file_data      LONGTEXT     NULL,          -- base64 dataURL (same pattern as reports)
+    file_data      LONGTEXT     NULL,          -- download URL / base64 dataURL
     metadata       JSON         NULL,          -- extra JSON for symptom/report payloads
+    -- E2E encryption fields (NULL = plaintext message)
+    is_encrypted   TINYINT(1)   NOT NULL DEFAULT 0,
+    iv             VARCHAR(64)  NULL,          -- AES-GCM nonce for text content
+    file_iv        VARCHAR(64)  NULL,          -- AES-GCM nonce for file_data
     status         ENUM('sent','delivered','read') NOT NULL DEFAULT 'sent',
     created_at     TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE
@@ -370,8 +374,7 @@ BEGIN
         ALTER TABLE doctor_patient_connections
             ADD COLUMN status       VARCHAR(20) NOT NULL DEFAULT 'accepted',
             ADD COLUMN requested_at TIMESTAMP   NULL,
-            ADD COLUMN responded_at TIMESTAMP   NULL,
-            ADD COLUMN connected_at TIMESTAMP   NULL DEFAULT CURRENT_TIMESTAMP;
+            ADD COLUMN responded_at TIMESTAMP   NULL;
     END IF;
 
     -- Auto-create chat rooms for all currently accepted connections
@@ -384,9 +387,83 @@ DELIMITER ;
 CALL dhas_chat_migrate();
 DROP PROCEDURE IF EXISTS dhas_chat_migrate;
 
+-- ── Migration: add E2E encryption columns to chat_messages ───────
+-- Required by keyController + socket.js encrypt/decrypt logic.
+-- Safe to run repeatedly — checks IF NOT EXISTS before each ALTER.
+DROP PROCEDURE IF EXISTS dhas_add_e2e_columns;
+DELIMITER //
+CREATE PROCEDURE dhas_add_e2e_columns()
+BEGIN
+    -- is_encrypted
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name   = 'chat_messages'
+          AND column_name  = 'is_encrypted'
+    ) THEN
+        ALTER TABLE chat_messages
+            ADD COLUMN is_encrypted TINYINT(1) NOT NULL DEFAULT 0 AFTER metadata;
+        SELECT 'Added is_encrypted to chat_messages' AS result;
+    END IF;
+
+    -- iv (AES-GCM nonce for text content)
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name   = 'chat_messages'
+          AND column_name  = 'iv'
+    ) THEN
+        ALTER TABLE chat_messages
+            ADD COLUMN iv VARCHAR(64) NULL AFTER is_encrypted;
+        SELECT 'Added iv to chat_messages' AS result;
+    END IF;
+
+    -- file_iv (AES-GCM nonce for file_data)
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name   = 'chat_messages'
+          AND column_name  = 'file_iv'
+    ) THEN
+        ALTER TABLE chat_messages
+            ADD COLUMN file_iv VARCHAR(64) NULL AFTER iv;
+        SELECT 'Added file_iv to chat_messages' AS result;
+    END IF;
+
+    -- public_key for users (ECDH key-exchange — keyController.js)
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name   = 'users'
+          AND column_name  = 'public_key'
+    ) THEN
+        ALTER TABLE users ADD COLUMN public_key TEXT NULL;
+        SELECT 'Added public_key to users' AS result;
+    END IF;
+
+    -- public_key for doctors (ECDH key-exchange — keyController.js)
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name   = 'doctors'
+          AND column_name  = 'public_key'
+    ) THEN
+        ALTER TABLE doctors ADD COLUMN public_key TEXT NULL;
+        SELECT 'Added public_key to doctors' AS result;
+    END IF;
+
+    -- Modify message_type ENUM to include 'voice'
+    ALTER TABLE chat_messages MODIFY COLUMN message_type ENUM('text','image','pdf','voice','symptom_share','report_share') NOT NULL DEFAULT 'text';
+END //
+DELIMITER ;
+CALL dhas_add_e2e_columns();
+DROP PROCEDURE IF EXISTS dhas_add_e2e_columns;
+
 -- ============================================================
 -- NOTES:
---   • file_data stores base64 (same approach as your reports table)
+--   • file_data stores the download path or base64 (same approach as reports table)
+--   • is_encrypted=1 means content/file_data are AES-GCM ciphertext (base64).
+--     iv / file_iv hold the corresponding AES-GCM nonces.
 --   • metadata JSON stores:
 --       symptom_share → { symptoms:[], condition_name, severity, checked_at }
 --       report_share  → { report_id, filename, filetype }
@@ -401,3 +478,62 @@ DROP PROCEDURE IF EXISTS dhas_chat_migrate;
 --   • To hide a specific doctor: UPDATE doctors SET is_verified=0 WHERE id=X;
 --   • consultation_fee has been removed from the schema entirely.
 -- ============================================================
+SELECT DATABASE();
+SHOW TABLES;
+DESCRIBE users;
+
+CREATE TABLE IF NOT EXISTS chat_rooms (
+    id             INT AUTO_INCREMENT PRIMARY KEY,
+    connection_id  INT          NOT NULL UNIQUE,
+    doctor_id      INT          NOT NULL,
+    patient_id     INT          NOT NULL,
+    created_at     TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (connection_id) REFERENCES doctor_patient_connections(id) ON DELETE CASCADE,
+    FOREIGN KEY (doctor_id)     REFERENCES doctors(id)  ON DELETE CASCADE,
+    FOREIGN KEY (patient_id)    REFERENCES users(id)    ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id             INT AUTO_INCREMENT PRIMARY KEY,
+    room_id        INT          NOT NULL,
+    sender_type    ENUM('doctor','patient') NOT NULL,
+    sender_id      INT          NOT NULL,
+    message_type   ENUM('text','image','pdf','voice','symptom_share','report_share') NOT NULL DEFAULT 'text',
+    content        TEXT         NULL,
+    file_name      VARCHAR(255) NULL,
+    file_size      VARCHAR(20)  NULL,
+    file_mime      VARCHAR(80)  NULL,
+    file_data      LONGTEXT     NULL,
+    metadata       JSON         NULL,
+    is_encrypted   TINYINT(1)   NOT NULL DEFAULT 0,
+    iv             VARCHAR(64)  NULL,
+    file_iv        VARCHAR(64)  NULL,
+    status         ENUM('sent','delivered','read') NOT NULL DEFAULT 'sent',
+    created_at     TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE
+);
+
+ALTER TABLE doctor_patient_connections ADD COLUMN responded_at TIMESTAMP NULL;
+CREATE INDEX idx_chat_msg_room_id ON chat_messages (room_id);
+CREATE INDEX idx_chat_msg_created_at ON chat_messages (created_at);
+CREATE INDEX idx_chat_rooms_doctor ON chat_rooms (doctor_id);
+CREATE INDEX idx_chat_rooms_patient ON chat_rooms (patient_id);
+use dhas_db; select * from users;
+select * from doctors;
+
+ALTER TABLE users
+ADD COLUMN public_key TEXT NULL;
+
+ALTER TABLE doctors
+ADD COLUMN public_key TEXT NULL;
+SHOW COLUMNS FROM doctors LIKE 'public_key';
+SHOW COLUMNS FROM users LIKE 'public_key';
+
+ALTER TABLE users
+    ADD COLUMN encrypted_private_key TEXT NULL,
+    ADD COLUMN key_iv    VARCHAR(64) NULL,
+    ADD COLUMN key_salt  VARCHAR(64) NULL;
+
+ALTER TABLE doctors
+    ADD COLUMN encrypted_private_key TEXT NULL,
+    ADD COLUMN key_iv    VARCHAR(64) NULL,
+    ADD COLUMN key_salt  VARCHAR(64) NULL;
