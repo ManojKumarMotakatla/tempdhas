@@ -86,6 +86,7 @@
     .text-center{text-align:center}
     .text-muted{color:var(--text-muted,#6b7fa3)}
 
+    /* ── Google Fit status card ── */
     .connect-card{background:var(--card-bg,#fff);border-radius:18px;padding:20px;border:1px solid var(--border,#e4e9f4);margin-bottom:14px;box-shadow:0 2px 20px rgba(42,108,246,.09)}
     html.dark .connect-card{background:#111c3c;border-color:#1e2e58}
     .connect-card h4{font-family:'Fraunces',serif;font-size:1rem;font-weight:600;margin-bottom:10px;color:var(--text,#0d1b3e);display:flex;align-items:center;gap:8px}
@@ -99,7 +100,36 @@
     .dhas-btn{display:inline-block;padding:11px 20px;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.9rem;cursor:pointer;background:linear-gradient(135deg,#2a6cf6,#4f8ef9);color:#fff;transition:all .2s;margin-top:12px}
     .dhas-btn:hover{transform:translateY(-1px)}
 
-    #fitStatus{font-size:.8rem;color:#2e7d32;margin-top:4px;display:none}
+    /* Connected / reconnect status rows */
+    .fit-status-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+    .fit-status-left{display:flex;align-items:center;gap:12px;min-width:0}
+    .fit-status-icon{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .fit-status-icon.ok{background:#e8f5e9}
+    html.dark .fit-status-icon.ok{background:rgba(46,125,50,.18)}
+    .fit-status-icon.warn{background:#fff8e1}
+    html.dark .fit-status-icon.warn{background:rgba(245,127,23,.18)}
+    .fit-status-title{font-weight:700;font-size:.9rem;line-height:1.3}
+    .fit-status-title.ok{color:#2e7d32}
+    html.dark .fit-status-title.ok{color:#6ee7b7}
+    .fit-status-title.warn{color:#f57f17}
+    html.dark .fit-status-title.warn{color:#fbbf24}
+    .fit-status-sub{font-size:.75rem;color:var(--text-muted,#6b7fa3);margin-top:2px}
+    .fit-actions{display:flex;gap:8px;flex-wrap:wrap;flex-shrink:0}
+    .fit-disconnect-btn{
+      background:none;border:1.5px solid #f25c7d;color:#f25c7d;
+      padding:8px 16px;border-radius:9px;font-family:'DM Sans',sans-serif;
+      font-weight:700;font-size:.8rem;cursor:pointer;transition:all .18s;white-space:nowrap;
+    }
+    .fit-disconnect-btn:hover{background:#fee2e2;}
+    html.dark .fit-disconnect-btn:hover{background:rgba(242,92,125,.15)}
+    .fit-reconnect-btn{
+      background:linear-gradient(135deg,#2a6cf6,#4f8ef9);color:#fff;border:none;
+      padding:9px 16px;border-radius:9px;font-family:'DM Sans',sans-serif;
+      font-weight:700;font-size:.8rem;cursor:pointer;transition:all .18s;white-space:nowrap;
+    }
+    .fit-reconnect-btn:hover{opacity:.9}
+    .spinner-sm{width:18px;height:18px;border-radius:50%;border:2.5px solid var(--border,#e4e9f4);border-top-color:var(--blue,#2a6cf6);animation:fitspin .7s linear infinite;flex-shrink:0}
+    @keyframes fitspin{to{transform:rotate(360deg)}}
 
     /* ── In-page toast ── */
     #dhasToast {
@@ -152,31 +182,13 @@
       <div class="page-subtitle">Track your daily steps and stay active</div>
     </div>
 
-    <!-- Google Fit connect card -->
+    <!-- Google Fit status card (content swapped by JS based on connection state) -->
     <div class="connect-card" id="fitConnectCard">
-      <h4>
-        <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
-        Sync Activity Data
-      </h4>
-      <p>Connect your fitness account to enable real-time step tracking, calorie analysis, distance monitoring, and weekly health insights.</p>
-
-      <div class="info-box">
-        <strong>First time using this feature?</strong><br>
-        Install Google Fit and allow Activity Tracking permissions on your phone.<br><br>
-        <a href="https://play.google.com/store/apps/details?id=com.google.android.apps.fitness" target="_blank"
-           style="display:inline-block;background:#34a853;color:white;padding:7px 14px;border-radius:8px;text-decoration:none;font-size:.8rem;font-weight:600">
-          Install Google Fit
-        </a><br><br>
-        <strong>Setup:</strong>
-        <ol style="padding-left:18px;margin-top:6px">
-          <li>Install Google Fit and log in</li>
-          <li>Allow Activity &amp; Fitness permissions</li>
-          <li>Walk with your phone for a few minutes</li>
-          <li>Return here and connect</li>
-        </ol>
+      <div id="fitCardContent">
+        <div style="text-align:center;padding:6px 0;color:var(--text-muted,#6b7fa3);font-size:.85rem;display:flex;align-items:center;justify-content:center;gap:10px;">
+          <div class="spinner-sm"></div> Checking Google Fit connection…
+        </div>
       </div>
-
-      <button onclick="connectGoogleFit()" class="dhas-btn">Connect with Google Fit</button>
     </div>
 
     <!-- Main counter card -->
@@ -199,7 +211,6 @@
 
         <div class="steps-big" id="stepCount">0</div>
         <div class="steps-sub">Steps</div>
-        <div id="fitStatus">Connected to Google Fit</div>
       </div>
 
       <div class="steps-goal">Goal: <span id="goalDisplay">10,000</span> steps</div>
@@ -333,57 +344,148 @@
   }
 
   // ══════════════════════════════════════════════════════════
-  // GOOGLE FIT INTEGRATION — v3
+  // GOOGLE FIT INTEGRATION — v4
   //
-  // FIX 1 (kept dropping back to full "how to connect" card):
-  //   Google's silent token refresh (prompt:"") genuinely fails
-  //   often on a fresh page load — it depends on third-party
-  //   cookie / session state that Safari and Chrome increasingly
-  //   restrict. Previously a failed silent refresh cleared the
-  //   whole connection and showed the full onboarding card again.
-  //   Now there are three UI states instead of two:
-  //     "none"      — never connected → full onboarding card
-  //     "connecting"— trying silent refresh → "Connecting…" status
-  //     "connected" — synced successfully → live status + Disconnect
-  //     "reconnect" — WAS connected, silent refresh failed → a
-  //                   single small "Reconnect" button (one click,
-  //                   no re-reading the whole setup guide)
-  //   We only fully clear the stored connection (back to "none")
-  //   if the person explicitly clicks Disconnect.
+  // FIXES vs previous version:
   //
-  // FIX 2 (count looked frozen while real Fit total kept climbing):
-  //   The 30s setInterval poll is throttled or fully paused by the
-  //   browser once the tab is backgrounded for a few minutes
-  //   (Chrome's intensive timer throttling, Safari App Nap, etc).
-  //   So the poll silently stops without erroring. Fix: listen for
-  //   `visibilitychange` and force an immediate re-sync the instant
-  //   the tab becomes visible again — this is the actual moment a
-  //   stale count would otherwise be shown to the user.
+  // 1. "Asks to connect every refresh":
+  //    connectGoogleFit() used to wipe the saved connection flag from
+  //    localStorage whenever the FIRST sync call failed for ANY reason
+  //    (a transient network hiccup, a malformed aggregate request,
+  //    anything) — not just a real "access revoked" case. That meant
+  //    the "you're connected" flag rarely survived a reload, so the
+  //    full onboarding card kept reappearing.
+  //    Fix: we now save the connection the moment we get a VALID
+  //    access token, independent of whether the very first sync call
+  //    succeeds. We only ever clear the stored connection when the
+  //    user explicitly clicks Disconnect, or when Google itself
+  //    reports the token as unauthorized/revoked (401).
   //
-  // (Kept from v2: sums every point/dataset/bucket instead of only
-  //  point[0]; silent token refresh a minute before expiry; real
-  //  Disconnect button that revokes + resumes accelerometer.)
+  // 2. "Steps stay 0 even though Google Fit shows steps increasing":
+  //    The aggregate request didn't specify a dataSourceId, and on
+  //    many accounts querying "com.google.step_count.delta" without
+  //    one returns an empty/zero merged bucket even though the Fit
+  //    app itself has real data. Fix: we now request the officially
+  //    documented merged/derived step source first
+  //    ("derived:com.google.step_count.delta:com.google.android.gms:estimated_steps"),
+  //    and if that specific request errors out (not just returns 0),
+  //    we automatically retry without the dataSourceId as a fallback.
+  //    The raw API response and computed total are also logged to
+  //    the console (and shown in error toasts) to make future
+  //    debugging immediate instead of guessing blind.
+  //
+  // 3. No clear Disconnect option:
+  //    The Google Fit card now has three explicit states rendered as
+  //    one clean card — "Connect" (never linked), "Connected" (green,
+  //    with a visible Disconnect button), and "Reconnect" (session
+  //    needs a token refresh — one-tap Reconnect + Disconnect). No
+  //    hidden tiny text links.
   // ══════════════════════════════════════════════════════════
 
   const GFIT_CLIENT_ID   = "935050379586-3vj8chtqv922uqmqurgknmtdseh0vlpv.apps.googleusercontent.com";
   const GFIT_SCOPE       = "https://www.googleapis.com/auth/fitness.activity.read";
-  const GFIT_STORAGE_KEY = "dhas_googlefit_connection";
+  const GFIT_STORAGE_KEY = "dhas_googlefit_connection_v2";
   const GFIT_POLL_MS     = 30 * 1000; // best-effort while tab is visible & unthrottled
+  const GFIT_MERGED_SOURCE = "derived:com.google.step_count.delta:com.google.android.gms:estimated_steps";
 
   let gfitAccessToken    = null;
   let gfitTokenExpiresAt = 0;
   let gfitPollTimer      = null;
-  let gfitState          = "none"; // "none" | "connecting" | "connected" | "reconnect"
+  let gfitState          = "checking"; // checking | none | connecting | connected | reconnect
 
   function gfitLoadConnection() {
     try { return JSON.parse(localStorage.getItem(GFIT_STORAGE_KEY) || "null"); }
     catch (e) { return null; }
   }
   function gfitSaveConnection() {
-    try { localStorage.setItem(GFIT_STORAGE_KEY, JSON.stringify({ connected: true })); } catch (e) {}
+    try { localStorage.setItem(GFIT_STORAGE_KEY, JSON.stringify({ connected: true, since: Date.now() })); } catch (e) {}
   }
   function gfitClearConnection() {
     try { localStorage.removeItem(GFIT_STORAGE_KEY); } catch (e) {}
+  }
+
+  // ── Card rendering ──────────────────────────────────────────
+  function renderFitCard() {
+    const el = document.getElementById("fitCardContent");
+    if (!el) return;
+
+    if (gfitState === "checking") {
+      el.innerHTML = `
+        <div style="text-align:center;padding:6px 0;color:var(--text-muted,#6b7fa3);font-size:.85rem;display:flex;align-items:center;justify-content:center;gap:10px;">
+          <div class="spinner-sm"></div> Checking Google Fit connection…
+        </div>`;
+
+    } else if (gfitState === "none") {
+      el.innerHTML = `
+        <h4>
+          <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+          Sync Activity Data
+        </h4>
+        <p>Connect your fitness account to enable real-time step tracking, calorie analysis, distance monitoring, and weekly health insights.</p>
+        <div class="info-box">
+          <strong>First time using this feature?</strong><br>
+          Install Google Fit and allow Activity Tracking permissions on your phone.<br><br>
+          <a href="https://play.google.com/store/apps/details?id=com.google.android.apps.fitness" target="_blank"
+             style="display:inline-block;background:#34a853;color:white;padding:7px 14px;border-radius:8px;text-decoration:none;font-size:.8rem;font-weight:600">
+            Install Google Fit
+          </a><br><br>
+          <strong>Setup:</strong>
+          <ol style="padding-left:18px;margin-top:6px">
+            <li>Install Google Fit and log in</li>
+            <li>Allow Activity &amp; Fitness permissions</li>
+            <li>Walk with your phone for a few minutes</li>
+            <li>Return here and connect</li>
+          </ol>
+        </div>
+        <button onclick="connectGoogleFit()" class="dhas-btn">Connect with Google Fit</button>`;
+
+    } else if (gfitState === "connecting") {
+      el.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 0;">
+          <div class="spinner-sm"></div>
+          <span style="font-size:.87rem;color:var(--text,#0d1b3e);">Connecting to Google Fit…</span>
+        </div>`;
+
+    } else if (gfitState === "connected") {
+      el.innerHTML = `
+        <div class="fit-status-row">
+          <div class="fit-status-left">
+            <div class="fit-status-icon ok">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2e7d32" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+            </div>
+            <div style="min-width:0;">
+              <div class="fit-status-title ok">Connected to Google Fit</div>
+              <div class="fit-status-sub" id="fitLastSync">Syncing…</div>
+            </div>
+          </div>
+          <div class="fit-actions">
+            <button onclick="disconnectGoogleFit()" class="fit-disconnect-btn">Disconnect</button>
+          </div>
+        </div>`;
+
+    } else if (gfitState === "reconnect") {
+      el.innerHTML = `
+        <div class="fit-status-row">
+          <div class="fit-status-left">
+            <div class="fit-status-icon warn">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f57f17" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <div style="min-width:0;">
+              <div class="fit-status-title warn">Google Fit session needs a refresh</div>
+              <div class="fit-status-sub">Tap Reconnect to resume syncing</div>
+            </div>
+          </div>
+          <div class="fit-actions">
+            <button onclick="reconnectGoogleFit()" class="fit-reconnect-btn">Reconnect</button>
+            <button onclick="disconnectGoogleFit()" class="fit-disconnect-btn">Disconnect</button>
+          </div>
+        </div>`;
+    }
+  }
+
+  function setGfitState(state) {
+    gfitState = state;
+    renderFitCard();
   }
 
   // Sums every step-count point across every dataset in every bucket.
@@ -404,32 +506,61 @@
     return total;
   }
 
+  // Tries the officially documented merged/derived step source first
+  // (matches what the Google Fit app itself shows). If that specific
+  // request errors (not just returns zero), retries without a
+  // dataSourceId as a fallback. Logs everything for debugging.
   async function gfitFetchTodaySteps(accessToken) {
-    const res = await fetch(
-      "https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate",
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          aggregateBy: [{ dataTypeName: "com.google.step_count.delta" }],
-          bucketByTime: { durationMillis: 86400000 },
-          startTimeMillis: new Date().setHours(0, 0, 0, 0),
-          endTimeMillis: Date.now()
-        })
+    const startTimeMillis = new Date().setHours(0, 0, 0, 0);
+    const endTimeMillis   = Date.now();
+
+    async function tryAggregate(withSource) {
+      const aggregateBy = withSource
+        ? [{ dataTypeName: "com.google.step_count.delta", dataSourceId: GFIT_MERGED_SOURCE }]
+        : [{ dataTypeName: "com.google.step_count.delta" }];
+
+      const res = await fetch(
+        "https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate",
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            aggregateBy,
+            bucketByTime: { durationMillis: 86400000 },
+            startTimeMillis,
+            endTimeMillis
+          })
+        }
+      );
+
+      if (res.status === 401) {
+        const err = new Error("Google Fit access token is no longer valid.");
+        err.unauthorized = true;
+        throw err;
       }
-    );
-    if (res.status === 401) {
-      // Token was revoked/invalidated server-side mid-session.
-      const err = new Error("Fit API unauthorized");
-      err.unauthorized = true;
-      throw err;
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`Fit API responded ${res.status}: ${text.slice(0, 200)}`);
+      }
+      return res.json();
     }
-    if (!res.ok) throw new Error("Fit API error " + res.status);
-    const data = await res.json();
-    return gfitSumSteps(data);
+
+    let data;
+    try {
+      data = await tryAggregate(true);
+    } catch (e) {
+      if (e.unauthorized) throw e;
+      console.warn("[GoogleFit] merged-source request failed, retrying without dataSourceId:", e.message);
+      data = await tryAggregate(false);
+    }
+
+    console.log("[GoogleFit] raw aggregate response:", data);
+    const total = gfitSumSteps(data);
+    console.log("[GoogleFit] computed total steps for today:", total);
+    return total;
   }
 
   // Wraps GIS's token flow in a Promise. prompt="" = silent (no popup,
@@ -456,8 +587,8 @@
   }
 
   // Returns a valid access token, silently refreshing it if missing or
-  // about to expire. Returns null (does NOT clear the stored connection)
-  // if silent refresh fails — caller decides what state to show.
+  // about to expire. Returns null if silent refresh fails — caller
+  // decides what state to show. Does NOT clear the stored connection.
   async function gfitGetValidToken() {
     const now = Date.now();
     if (gfitAccessToken && now < gfitTokenExpiresAt - 60000) {
@@ -477,60 +608,28 @@
       if (window.DHAS_setStepsFromGoogleFit) {
         window.DHAS_setStepsFromGoogleFit(totalSteps);
       }
-      const fitStatus = document.getElementById("fitStatus");
-      if (fitStatus) {
+      const lastSyncEl = document.getElementById("fitLastSync");
+      if (lastSyncEl) {
         const timeStr = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-        fitStatus.textContent = `Connected to Google Fit · last synced ${timeStr}`;
+        lastSyncEl.textContent = `${totalSteps.toLocaleString()} steps · last synced ${timeStr}`;
       }
       if (!silent) {
         showToast(`Synced ${totalSteps.toLocaleString()} steps from Google Fit.`, "success");
       }
       return true;
     } catch (err) {
-      console.error(err);
+      console.error("[GoogleFit] sync failed:", err);
       if (err && err.unauthorized) {
-        // Access genuinely revoked — this DOES need a full reconnect state,
-        // but we still don't wipe the record, so the light "Reconnect"
-        // button shows instead of the whole onboarding card again.
+        // Token genuinely revoked/expired server-side — needs reconnect,
+        // but we keep the stored "was connected" flag so we show the
+        // lightweight Reconnect button, not the full onboarding card.
         gfitAccessToken = null;
         setGfitState("reconnect");
       }
-      if (!silent) showToast("Unable to sync Google Fit data. Please try again.", "error");
-      return false;
-    }
-  }
-
-  function setGfitState(state) {
-    gfitState = state;
-    const card          = document.getElementById("fitConnectCard");
-    const fitStatus       = document.getElementById("fitStatus");
-    const disconnectBtn  = document.getElementById("fitDisconnectBtn");
-
-    if (state === "none") {
-      if (card) card.style.display = "block";
-      if (fitStatus) fitStatus.style.display = "none";
-      if (disconnectBtn) disconnectBtn.style.display = "none";
-      return;
-    }
-
-    if (card) card.style.display = "none";
-    if (fitStatus) fitStatus.style.display = "block";
-
-    if (state === "connecting") {
-      if (fitStatus) fitStatus.innerHTML = "Connecting to Google Fit…";
-      if (disconnectBtn) disconnectBtn.style.display = "none";
-    } else if (state === "connected") {
-      if (disconnectBtn) disconnectBtn.style.display = "inline-flex";
-      // fitStatus text itself is set by gfitApplySync() on each sync
-    } else if (state === "reconnect") {
-      if (disconnectBtn) disconnectBtn.style.display = "none";
-      if (fitStatus) {
-        fitStatus.innerHTML =
-          `Google Fit session needs a quick refresh — ` +
-          `<a href="#" id="fitReconnectLink" style="color:#2a6cf6;text-decoration:underline;font-weight:600;">Reconnect</a>`;
-        const link = document.getElementById("fitReconnectLink");
-        if (link) link.addEventListener("click", (e) => { e.preventDefault(); reconnectGoogleFit(); });
+      if (!silent) {
+        showToast("Unable to sync Google Fit data: " + (err && err.message ? err.message : "unknown error"), "error");
       }
+      return false;
     }
   }
 
@@ -540,8 +639,6 @@
     if (gfitState !== "connected" && gfitState !== "connecting") return;
     const token = await gfitGetValidToken();
     if (!token) {
-      // Silent refresh failed mid-session — offer the light reconnect
-      // button rather than clearing everything.
       setGfitState("reconnect");
       stopGfitPolling();
       return;
@@ -564,7 +661,7 @@
     if (gfitPollTimer) { clearInterval(gfitPollTimer); gfitPollTimer = null; }
   }
 
-  // FIX 2: setInterval is throttled/paused while the tab is hidden, so a
+  // setInterval is throttled/paused while the tab is hidden, so a
   // 30s poll can silently stop firing for minutes at a time. Force a
   // resync the instant the tab regains focus/visibility so the count
   // never sits stale for longer than "however long the person was away".
@@ -575,30 +672,28 @@
 
   // ── Manual connect (button click — has user gesture) ───────
   async function connectGoogleFit() {
+    setGfitState("connecting");
     const response = await gfitRequestToken(undefined);
     if (!response) {
       showToast("Google Fit connection was cancelled or failed.", "error");
+      setGfitState("none");
       return;
     }
     gfitAccessToken    = response.access_token;
     gfitTokenExpiresAt = Date.now() + (response.expires_in || 3600) * 1000;
+
+    // FIX: save the connection as soon as we have a VALID token,
+    // regardless of whether the first sync call below happens to
+    // succeed. A transient sync failure should never force the user
+    // to click "Connect" again on next reload.
     gfitSaveConnection();
-    setGfitState("connecting");
+
     const ok = await gfitApplySync(gfitAccessToken, { silent: false });
-    if (ok) {
-      setGfitState("connected");
-      startGfitPolling();
-    } else if (gfitState !== "reconnect") {
-      // Genuine failure (not the unauthorized case, which already set
-      // "reconnect") — clear it, nothing usable was ever stored.
-      gfitClearConnection();
-      setGfitState("none");
-    }
+    setGfitState(ok ? "connected" : gfitState === "reconnect" ? "reconnect" : "reconnect");
+    if (ok) startGfitPolling();
   }
 
   // ── Lightweight reconnect (from the "reconnect" state button) ──
-  // Still needs a user gesture per Google's rules, but skips straight
-  // back to syncing instead of re-showing the full setup instructions.
   async function reconnectGoogleFit() {
     setGfitState("connecting");
     const response = await gfitRequestToken(undefined);
@@ -611,12 +706,8 @@
     gfitTokenExpiresAt = Date.now() + (response.expires_in || 3600) * 1000;
     gfitSaveConnection();
     const ok = await gfitApplySync(gfitAccessToken, { silent: false });
-    if (ok) {
-      setGfitState("connected");
-      startGfitPolling();
-    } else if (gfitState !== "reconnect") {
-      setGfitState("reconnect");
-    }
+    setGfitState(ok ? "connected" : "reconnect");
+    if (ok) startGfitPolling();
   }
   window.reconnectGoogleFit = reconnectGoogleFit;
 
@@ -629,7 +720,8 @@
     const token = await gfitGetValidToken();
     if (!token) {
       // Silent refresh failed — keep the stored connection, just show
-      // the lightweight reconnect button instead of wiping everything.
+      // the lightweight reconnect button instead of wiping everything
+      // and showing the full onboarding card again.
       setGfitState("reconnect");
       return;
     }
@@ -642,8 +734,8 @@
     }
   }
 
-  // ── Disconnect (explicit user action — this is the only path
-  //    that actually clears the stored connection) ──────────────
+  // ── Disconnect (explicit user action — this is the ONLY path
+  //    that clears the stored connection) ──────────────────────
   function disconnectGoogleFit() {
     stopGfitPolling();
     if (gfitAccessToken && typeof google !== "undefined" && google.accounts && google.accounts.oauth2.revoke) {
@@ -656,22 +748,8 @@
     setGfitState("none");
     showToast("Disconnected from Google Fit. Switched back to on-device tracking.", "success");
   }
-  window.disconnectGoogleFit = disconnectGoogleFit;
-
-  // Ensure a Disconnect button element exists (created once; steps.html's
-  // static markup doesn't need to change — we just need somewhere to hang it).
-  document.addEventListener("DOMContentLoaded", () => {
-    if (document.getElementById("fitDisconnectBtn")) return;
-    const fitStatus = document.getElementById("fitStatus");
-    if (!fitStatus || !fitStatus.parentElement) return;
-    const btn = document.createElement("a");
-    btn.id = "fitDisconnectBtn";
-    btn.href = "#";
-    btn.textContent = "Disconnect";
-    btn.style.cssText = "display:none;margin-left:8px;color:#c62828;text-decoration:underline;font-size:.8rem;";
-    btn.addEventListener("click", (e) => { e.preventDefault(); disconnectGoogleFit(); });
-    fitStatus.parentElement.insertBefore(btn, fitStatus.nextSibling);
-  });
+  window.disconnectGoogleFit  = disconnectGoogleFit;
+  window.connectGoogleFit     = connectGoogleFit;
 
   // Kick off silent reconnect once GIS + steps.js hooks are ready.
   window.addEventListener("load", () => {
