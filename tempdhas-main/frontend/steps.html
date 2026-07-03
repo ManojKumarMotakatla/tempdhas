@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+   <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="shortcut icon" href="favicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Step Counter - DHAS</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Fraunces:ital,wght@0,600;0,700&display=swap" rel="stylesheet">
+  <style>
+    :root{--navy:#0b1437;--navy-mid:#112057;--blue:#2a6cf6;--teal:#00c9b1}
+    body{font-family:'DM Sans',sans-serif}
+
+    .page-wrap{max-width:520px;margin:0 auto;padding:20px 16px 50px}
+
+    .page-header{
+     background:linear-gradient(135deg,#112057 0%,#2a6cf6 50%,#00c9b1 100%);
+      border-radius:20px;padding:28px 20px 24px;margin-bottom:20px;
+      position:relative;overflow:hidden;text-align:center;
+    }
+    .page-header::before{content:'';position:absolute;top:-30px;right:-30px;width:130px;height:130px;background:rgba(255,255,255,0.07);border-radius:50%}
+    .page-header::after{content:'';position:absolute;bottom:-20px;left:40px;width:90px;height:90px;background:rgba(255,255,255,0.05);border-radius:50%}
+
+    .header-icon-wrap{
+      width:60px;height:60px;border-radius:18px;
+      background:rgba(255,255,255,0.15);
+      border:1.5px solid rgba(255,255,255,0.25);
+      display:flex;align-items:center;justify-content:center;
+      margin:0 auto 14px;position:relative;
+    }
+    .header-icon-wrap svg{width:30px;height:30px;stroke:#fff;fill:none;stroke-width:1.8}
+    .page-title{font-family:'Fraunces',serif;color:#fff;font-size:1.75rem;font-weight:700;margin-bottom:6px;position:relative}
+    .page-subtitle{color:rgba(255,255,255,0.72);font-size:0.85rem;font-weight:500;position:relative}
+
+    .dhas-card{background:var(--card-bg,#fff);border-radius:18px;padding:20px;box-shadow:0 2px 20px rgba(42,108,246,.09);border:1px solid var(--border,#e4e9f4);margin-bottom:14px;transition:background .35s,border-color .35s}
+    html.dark .dhas-card{background:#111c3c;border-color:#1e2e58}
+    .dhas-card h5{font-family:'Fraunces',serif;font-size:1rem;font-weight:600;margin-bottom:14px;color:var(--text,#0d1b3e);display:flex;align-items:center;gap:8px}
+    .dhas-card h5 svg{width:18px;height:18px;stroke:var(--blue,#2a6cf6);fill:none;stroke-width:2}
+    html.dark .dhas-card h5{color:#e8efff}
+
+    .gauge-wrap{display:flex;flex-direction:column;align-items:center;margin-bottom:8px}
+    .gauge-svg{overflow:visible}
+
+    .live-pill{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;padding:4px 14px;border-radius:20px;margin-bottom:14px;border:1px solid transparent;transition:all .4s}
+    .live-pill.waiting{background:#f5f5f5;color:#888;border-color:#ddd}
+    .live-pill.walking{background:#e8f5e9;color:#2e7d32;border-color:#a5d6a7}
+    .live-pill.still{background:#fff8e1;color:#f57f17;border-color:#ffe082}
+    .dot-pulse{width:7px;height:7px;border-radius:50%;background:#4caf50;animation:pulse 1s infinite;flex-shrink:0}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+    .walk-type-row{display:flex;justify-content:space-between;font-size:.75rem;color:#888;margin:12px 0 4px}
+    .walk-bar-bg{height:6px;border-radius:3px;background:#eee;position:relative;overflow:hidden;margin-bottom:4px}
+    .walk-bar-slow{position:absolute;left:0;top:0;height:100%;background:#ffb3a0;border-radius:3px;transition:width .4s}
+    .walk-bar-brisk{position:absolute;right:0;top:0;height:100%;background:var(--primary,#e55);border-radius:3px 0 0 3px;transition:width .4s}
+
+    .cal-fun-card{display:flex;justify-content:space-between;align-items:center;background:#fff3e0;border:1px solid #ffcc80;border-radius:12px;padding:14px 18px;margin-top:12px}
+    html.dark .cal-fun-card{background:rgba(255,193,7,.08);border-color:rgba(255,193,7,.2)}
+    .cal-fun-card .val{font-size:1.6rem;font-weight:700;color:#bf360c}
+    .cal-fun-card .sub{font-size:.75rem;color:#a0522d;margin-top:2px}
+
+    .who-row{display:flex;align-items:center;gap:18px;margin-top:10px}
+    .who-ring-wrap{position:relative;flex-shrink:0}
+    .who-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;line-height:1.3}
+    .who-center .pct{font-size:1rem;font-weight:700}
+    .who-center .mins{font-size:.7rem;color:#888}
+    .who-breakdown .item{display:flex;justify-content:space-between;font-size:.8rem;padding:4px 0;border-bottom:1px solid #f0f0f0}
+    .who-breakdown .item:last-child{border:none}
+    .dot-icon{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px}
+
+    .week-chart{display:flex;align-items:flex-end;gap:5px;height:80px;margin:10px 0 4px}
+    .week-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px}
+    .week-bar{width:100%;border-radius:4px 4px 0 0;background:#ffd54f;min-height:3px;position:relative;transition:height .4s}
+    .week-bar.today{background:var(--primary,#e55)}
+    .week-crown{position:absolute;top:-14px;left:50%;transform:translateX(-50%);font-size:9px;display:none}
+    .week-day-label{font-size:9px;color:#aaa}
+
+    .steps-big{font-size:2.8rem;font-weight:700;margin:4px 0 2px}
+    .steps-sub{font-size:.8rem;color:#888;margin-bottom:6px}
+
+    .steps-goal{color:var(--text-muted,#6b7fa3);font-size:.9rem;margin-top:6px}
+    .steps-progress{height:8px;background:var(--border,#e4e9f4);border-radius:99px;margin:16px 0;overflow:hidden}
+    .steps-bar{height:100%;background:linear-gradient(90deg,#2a6cf6,#00c9b1);border-radius:99px;transition:width .4s}
+    .text-center{text-align:center}
+    .text-muted{color:var(--text-muted,#6b7fa3)}
+
+    /* ── Google Fit status card ── */
+    .connect-card{background:var(--card-bg,#fff);border-radius:18px;padding:20px;border:1px solid var(--border,#e4e9f4);margin-bottom:14px;box-shadow:0 2px 20px rgba(42,108,246,.09)}
+    html.dark .connect-card{background:#111c3c;border-color:#1e2e58}
+    .connect-card h4{font-family:'Fraunces',serif;font-size:1rem;font-weight:600;margin-bottom:10px;color:var(--text,#0d1b3e);display:flex;align-items:center;gap:8px}
+    .connect-card h4 svg{width:18px;height:18px;stroke:var(--blue,#2a6cf6);fill:none;stroke-width:2}
+    html.dark .connect-card h4{color:#e8efff}
+    .connect-card p{font-size:.87rem;color:var(--text-muted,#6b7fa3);line-height:1.6;margin-bottom:0}
+
+    .info-box{background:#fff8e1;border:1px solid #ffe082;border-radius:10px;padding:12px;margin-top:12px;font-size:.82rem;color:#795548;line-height:1.6}
+    html.dark .info-box{background:rgba(255,224,130,.08);border-color:rgba(255,224,130,.2);color:#d4a017}
+
+    .dhas-btn{display:inline-block;padding:11px 20px;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.9rem;cursor:pointer;background:linear-gradient(135deg,#2a6cf6,#4f8ef9);color:#fff;transition:all .2s;margin-top:12px}
+    .dhas-btn:hover{transform:translateY(-1px)}
+
+    /* Connected / reconnect status rows */
+    .fit-status-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+    .fit-status-left{display:flex;align-items:center;gap:12px;min-width:0}
+    .fit-status-icon{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .fit-status-icon.ok{background:#e8f5e9}
+    html.dark .fit-status-icon.ok{background:rgba(46,125,50,.18)}
+    .fit-status-icon.warn{background:#fff8e1}
+    html.dark .fit-status-icon.warn{background:rgba(245,127,23,.18)}
+    .fit-status-title{font-weight:700;font-size:.9rem;line-height:1.3}
+    .fit-status-title.ok{color:#2e7d32}
+    html.dark .fit-status-title.ok{color:#6ee7b7}
+    .fit-status-title.warn{color:#f57f17}
+    html.dark .fit-status-title.warn{color:#fbbf24}
+    .fit-status-sub{font-size:.75rem;color:var(--text-muted,#6b7fa3);margin-top:2px}
+    .fit-actions{display:flex;gap:8px;flex-wrap:wrap;flex-shrink:0}
+    .fit-disconnect-btn{
+      background:none;border:1.5px solid #f25c7d;color:#f25c7d;
+      padding:8px 16px;border-radius:9px;font-family:'DM Sans',sans-serif;
+      font-weight:700;font-size:.8rem;cursor:pointer;transition:all .18s;white-space:nowrap;
+    }
+    .fit-disconnect-btn:hover{background:#fee2e2;}
+    html.dark .fit-disconnect-btn:hover{background:rgba(242,92,125,.15)}
+    .fit-reconnect-btn{
+      background:linear-gradient(135deg,#2a6cf6,#4f8ef9);color:#fff;border:none;
+      padding:9px 16px;border-radius:9px;font-family:'DM Sans',sans-serif;
+      font-weight:700;font-size:.8rem;cursor:pointer;transition:all .18s;white-space:nowrap;
+    }
+    .fit-reconnect-btn:hover{opacity:.9}
+    .spinner-sm{width:18px;height:18px;border-radius:50%;border:2.5px solid var(--border,#e4e9f4);border-top-color:var(--blue,#2a6cf6);animation:fitspin .7s linear infinite;flex-shrink:0}
+    @keyframes fitspin{to{transform:rotate(360deg)}}
+
+    /* ── In-page toast ── */
+    #dhasToast {
+      position: fixed;
+      bottom: 24px;
+      left: 20px;
+      z-index: 99999;
+      max-width: 340px;
+      min-width: 240px;
+      padding: 13px 18px;
+      border-radius: 14px;
+      font-size: 0.87rem;
+      font-weight: 600;
+      line-height: 1.5;
+      display: none;
+      align-items: flex-start;
+      gap: 10px;
+      box-shadow: 0 6px 28px rgba(0,0,0,0.18);
+      font-family: 'DM Sans', sans-serif;
+    }
+    #dhasToast.success { background: #d1fae5; border: 1.5px solid #86efac; color: #166534; }
+    #dhasToast.error   { background: #fee2e2; border: 1.5px solid #fca5a5; color: #991b1b; }
+    html.dark #dhasToast.success, body.dark #dhasToast.success { background: #052e16; border-color: #166534; color: #86efac; }
+    html.dark #dhasToast.error,   body.dark #dhasToast.error   { background: #450a0a; border-color: #991b1b; color: #fca5a5; }
+    .toast-dismiss { margin-left: auto; background: none; border: none; cursor: pointer; color: inherit; opacity: 0.6; font-size: 14px; padding: 0 0 0 8px; }
+    .toast-dismiss:hover { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <nav class="dhas-navbar">
+    <div class="brand" style="font-family:'Fraunces',serif;font-weight:700;font-size:1.2rem;color:#fff;display:flex;align-items:center;gap:8px">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+      DHAS
+    </div>
+    <a href="dashboard.html" style="color:#fff;font-size:0.85rem;text-decoration:none;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.18);padding:6px 16px;border-radius:20px;display:flex;align-items:center;gap:6px">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 19l-7-7 7-7"/></svg>
+      Dashboard
+    </a>
+  </nav>
+
+  <div class="page-wrap">
+
+    <!-- ── Hero Header ── -->
+    <div class="page-header">
+      <div class="header-icon-wrap">
+        <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+      </div>
+      <div class="page-title">Step Counter</div>
+      <div class="page-subtitle">Track your daily steps and stay active</div>
+    </div>
+
+    <!-- Google Fit status card (content swapped by JS based on connection state) -->
+    <div class="connect-card" id="fitConnectCard">
+      <div id="fitCardContent">
+        <div style="text-align:center;padding:6px 0;color:var(--text-muted,#6b7fa3);font-size:.85rem;display:flex;align-items:center;justify-content:center;gap:10px;">
+          <div class="spinner-sm"></div> Checking Google Fit connection…
+        </div>
+      </div>
+    </div>
+
+    <!-- Main counter card -->
+    <div class="dhas-card text-center">
+
+      <div id="livePill" class="live-pill waiting">
+        <span class="dot-pulse" id="dotPulse" style="display:none"></span>
+        <span id="pillText">Initialising sensor…</span>
+      </div>
+
+      <div class="gauge-wrap">
+        <svg class="gauge-svg" width="210" height="115" viewBox="0 0 210 115" role="img" aria-label="Step progress gauge">
+          <path d="M20,105 A85,85 0 0,1 190,105" fill="none" stroke="#eee" stroke-width="10" stroke-linecap="round"/>
+          <path id="gaugeArc" d="M20,105 A85,85 0 0,1 190,105" fill="none" stroke="var(--primary,#e55)" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 267" style="transition:stroke-dasharray .5s ease"/>
+          <line id="gaugeNeedle" x1="105" y1="105" x2="20" y2="105" stroke="var(--primary,#e55)" stroke-width="3" stroke-linecap="round" style="transform-origin:105px 105px;transition:transform .5s ease"/>
+          <circle cx="105" cy="105" r="6" fill="var(--primary,#e55)"/>
+          <text x="18" y="120" font-size="9" fill="#aaa" text-anchor="middle">0</text>
+          <text x="192" y="120" font-size="9" fill="#aaa" text-anchor="middle">10k</text>
+        </svg>
+
+        <div class="steps-big" id="stepCount">0</div>
+        <div class="steps-sub">Steps</div>
+      </div>
+
+      <div class="steps-goal">Goal: <span id="goalDisplay">10,000</span> steps</div>
+      <div class="steps-progress" style="margin:8px 0 4px"><div class="steps-bar" id="progressBar" style="width:0%"></div></div>
+      <div class="text-muted" id="progressText" style="font-size:.8rem;margin-bottom:14px">0% of daily goal</div>
+
+      <div class="walk-type-row">
+        <span id="slowLabel">0 · 0%</span>
+        <span>Slow &nbsp;&nbsp; Brisk</span>
+        <span id="briskLabel">0 · 0%</span>
+      </div>
+      <div class="walk-bar-bg">
+        <div class="walk-bar-slow" id="slowBar" style="width:0%"></div>
+        <div class="walk-bar-brisk" id="briskBar" style="width:0%"></div>
+      </div>
+
+      <div style="display:flex;justify-content:space-around;margin:12px 0 16px">
+        <div>
+          <div style="font-size:.75rem;color:#888">Distance</div>
+          <div style="font-size:1.3rem;font-weight:700;color:#29b6f6"><span id="kmDisplay">0.00</span> km</div>
+        </div>
+        <div style="width:1px;background:#eee"></div>
+        <div>
+          <div style="font-size:.75rem;color:#888">Calories</div>
+          <div style="font-size:1.3rem;font-weight:700;color:var(--primary,#e55)"><span id="calDisplay">0</span> kcal</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats card -->
+    <div class="dhas-card">
+      <h5>
+        <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+        Today's Stats
+      </h5>
+      <div style="display:flex;justify-content:space-around;text-align:center;margin-top:8px">
+        <div>
+          <div style="font-size:1.4rem;font-weight:700;color:var(--primary)" id="calorieDisplay">0</div>
+          <div class="text-muted" style="font-size:.8rem">Calories</div>
+        </div>
+        <div>
+          <div style="font-size:1.4rem;font-weight:700;color:#29b6f6" id="kmStatDisplay">0.00</div>
+          <div class="text-muted" style="font-size:.8rem">Km Walked</div>
+        </div>
+        <div>
+          <div style="font-size:1.4rem;font-weight:700;color:#22d07a" id="minuteDisplay">0</div>
+          <div class="text-muted" style="font-size:.8rem">Min Active</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Calorie fun -->
+    <div class="cal-fun-card">
+      <div>
+        <div style="font-size:.8rem;color:#a0522d">Total calories burned</div>
+        <div class="val"><span id="calFunVal">0</span> kcal</div>
+        <div class="sub" id="calFunSub">≈ 0.00 banana chips</div>
+      </div>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#bf360c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+    </div>
+
+    <!-- WHO goal card -->
+    <div class="dhas-card" style="margin-top:12px">
+      <h5>
+        <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        Aerobic Exercise (WHO Goal)
+      </h5>
+      <div style="font-size:.8rem;color:#888;margin-bottom:8px">Goal this week: 150 Min (<span id="whoRemaining">150</span> Min remaining)</div>
+      <div class="who-row">
+        <div class="who-ring-wrap">
+          <svg width="76" height="76" viewBox="0 0 76 76" role="img" aria-label="WHO aerobic goal ring">
+            <circle cx="38" cy="38" r="30" fill="none" stroke="#eee" stroke-width="7"/>
+            <circle cx="38" cy="38" r="30" fill="none" stroke="var(--primary,#e55)" stroke-width="7" stroke-linecap="round" stroke-dasharray="188.5" stroke-dashoffset="188.5" transform="rotate(-90 38 38)" id="whoCircle" style="transition:stroke-dashoffset .5s"/>
+          </svg>
+          <div class="who-center">
+            <div class="pct" id="whoPct">0%</div>
+            <div class="mins" id="whoMins">0 Min</div>
+          </div>
+        </div>
+        <div class="who-breakdown" style="flex:1">
+          <div class="item">
+            <span><span class="dot-icon" style="background:var(--primary,#e55)"></span>Brisk walking</span>
+            <span id="briskMinsDisplay">0 Min</span>
+          </div>
+          <div class="item">
+            <span><span class="dot-icon" style="background:#42a5f5"></span>Running</span>
+            <span>0 Min</span>
+          </div>
+          <div class="item">
+            <span><span class="dot-icon" style="background:#ab47bc"></span>Cycling</span>
+            <span>0 Min</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Weekly summary -->
+    <div class="dhas-card" style="margin-top:12px">
+      <h5>
+        <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        This Week's Record
+      </h5>
+      <div style="display:flex;gap:12px;text-align:center;margin-bottom:10px">
+        <div style="flex:1"><div style="font-size:1.2rem;font-weight:700" id="weekSteps">0</div><div class="text-muted" style="font-size:.75rem">Steps</div></div>
+        <div style="width:1px;background:#eee"></div>
+        <div style="flex:1"><div style="font-size:1.2rem;font-weight:700" id="weekKm">0.00 km</div><div class="text-muted" style="font-size:.75rem">Distance</div></div>
+        <div style="width:1px;background:#eee"></div>
+        <div style="flex:1"><div style="font-size:1.2rem;font-weight:700" id="weekCal">0 kcal</div><div class="text-muted" style="font-size:.75rem">Calories</div></div>
+      </div>
+      <div class="week-chart" id="weekChart"></div>
+      <div style="display:flex;justify-content:space-between" id="weekDayLabels"></div>
+    </div>
+
+  </div>
+
+  <!-- In-page toast -->
+  <div id="dhasToast" role="status" aria-live="polite"></div>
+
+<script>
+  // ── In-page toast ─────────────────────────────────────────
+  let _toastTimer = null;
+  function showToast(text, type = "success", duration = 4500) {
+    const t = document.getElementById("dhasToast");
+    if (!t) return;
+    const icon = type === "success" ? "ti-circle-check" : "ti-alert-circle";
+    t.className = type;
+    t.innerHTML = `<i class="ti ${icon}" style="font-size:16px;flex-shrink:0;margin-top:1px" aria-hidden="true"></i><span>${text}</span><button class="toast-dismiss" onclick="this.parentElement.style.display='none'" aria-label="Dismiss"><i class="ti ti-x"></i></button>`;
+    t.style.display = "flex";
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { t.style.display = "none"; }, duration);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // GOOGLE FIT INTEGRATION — v4
+  //
+  // FIXES vs previous version:
+  //
+  // 1. "Asks to connect every refresh":
+  //    connectGoogleFit() used to wipe the saved connection flag from
+  //    localStorage whenever the FIRST sync call failed for ANY reason
+  //    (a transient network hiccup, a malformed aggregate request,
+  //    anything) — not just a real "access revoked" case. That meant
+  //    the "you're connected" flag rarely survived a reload, so the
+  //    full onboarding card kept reappearing.
+  //    Fix: we now save the connection the moment we get a VALID
+  //    access token, independent of whether the very first sync call
+  //    succeeds. We only ever clear the stored connection when the
+  //    user explicitly clicks Disconnect, or when Google itself
+  //    reports the token as unauthorized/revoked (401).
+  //
+  // 2. "Steps stay 0 even though Google Fit shows steps increasing":
+  //    The aggregate request didn't specify a dataSourceId, and on
+  //    many accounts querying "com.google.step_count.delta" without
+  //    one returns an empty/zero merged bucket even though the Fit
+  //    app itself has real data. Fix: we now request the officially
+  //    documented merged/derived step source first
+  //    ("derived:com.google.step_count.delta:com.google.android.gms:estimated_steps"),
+  //    and if that specific request errors out (not just returns 0),
+  //    we automatically retry without the dataSourceId as a fallback.
+  //    The raw API response and computed total are also logged to
+  //    the console (and shown in error toasts) to make future
+  //    debugging immediate instead of guessing blind.
+  //
+  // 3. No clear Disconnect option:
+  //    The Google Fit card now has three explicit states rendered as
+  //    one clean card — "Connect" (never linked), "Connected" (green,
+  //    with a visible Disconnect button), and "Reconnect" (session
+  //    needs a token refresh — one-tap Reconnect + Disconnect). No
+  //    hidden tiny text links.
+  // ══════════════════════════════════════════════════════════
+
+  const GFIT_CLIENT_ID   = "935050379586-3vj8chtqv922uqmqurgknmtdseh0vlpv.apps.googleusercontent.com";
+  const GFIT_SCOPE       = "https://www.googleapis.com/auth/fitness.activity.read";
+  const GFIT_STORAGE_KEY = "dhas_googlefit_connection_v2";
+  const GFIT_POLL_MS     = 30 * 1000; // best-effort while tab is visible & unthrottled
+  const GFIT_MERGED_SOURCE = "derived:com.google.step_count.delta:com.google.android.gms:estimated_steps";
+
+  let gfitAccessToken    = null;
+  let gfitTokenExpiresAt = 0;
+  let gfitPollTimer      = null;
+  let gfitState          = "checking"; // checking | none | connecting | connected | reconnect
+
+  function gfitLoadConnection() {
+    try { return JSON.parse(localStorage.getItem(GFIT_STORAGE_KEY) || "null"); }
+    catch (e) { return null; }
+  }
+  function gfitSaveConnection() {
+    try { localStorage.setItem(GFIT_STORAGE_KEY, JSON.stringify({ connected: true, since: Date.now() })); } catch (e) {}
+  }
+  function gfitClearConnection() {
+    try { localStorage.removeItem(GFIT_STORAGE_KEY); } catch (e) {}
+  }
+
+  // ── Card rendering ──────────────────────────────────────────
+  function renderFitCard() {
+    const el = document.getElementById("fitCardContent");
+    if (!el) return;
+
+    if (gfitState === "checking") {
+      el.innerHTML = `
+        <div style="text-align:center;padding:6px 0;color:var(--text-muted,#6b7fa3);font-size:.85rem;display:flex;align-items:center;justify-content:center;gap:10px;">
+          <div class="spinner-sm"></div> Checking Google Fit connection…
+        </div>`;
+
+    } else if (gfitState === "none") {
+      el.innerHTML = `
+        <h4>
+          <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+          Sync Activity Data
+        </h4>
+        <p>Connect your fitness account to enable real-time step tracking, calorie analysis, distance monitoring, and weekly health insights.</p>
+        <div class="info-box">
+          <strong>First time using this feature?</strong><br>
+          Install Google Fit and allow Activity Tracking permissions on your phone.<br><br>
+          <a href="https://play.google.com/store/apps/details?id=com.google.android.apps.fitness" target="_blank"
+             style="display:inline-block;background:#34a853;color:white;padding:7px 14px;border-radius:8px;text-decoration:none;font-size:.8rem;font-weight:600">
+            Install Google Fit
+          </a><br><br>
+          <strong>Setup:</strong>
+          <ol style="padding-left:18px;margin-top:6px">
+            <li>Install Google Fit and log in</li>
+            <li>Allow Activity &amp; Fitness permissions</li>
+            <li>Walk with your phone for a few minutes</li>
+            <li>Return here and connect</li>
+          </ol>
+        </div>
+        <button onclick="connectGoogleFit()" class="dhas-btn">Connect with Google Fit</button>`;
+
+    } else if (gfitState === "connecting") {
+      el.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 0;">
+          <div class="spinner-sm"></div>
+          <span style="font-size:.87rem;color:var(--text,#0d1b3e);">Connecting to Google Fit…</span>
+        </div>`;
+
+    } else if (gfitState === "connected") {
+      el.innerHTML = `
+        <div class="fit-status-row">
+          <div class="fit-status-left">
+            <div class="fit-status-icon ok">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2e7d32" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+            </div>
+            <div style="min-width:0;">
+              <div class="fit-status-title ok">Connected to Google Fit</div>
+              <div class="fit-status-sub" id="fitLastSync">Syncing…</div>
+            </div>
+          </div>
+          <div class="fit-actions">
+            <button onclick="disconnectGoogleFit()" class="fit-disconnect-btn">Disconnect</button>
+          </div>
+        </div>`;
+
+    } else if (gfitState === "reconnect") {
+      el.innerHTML = `
+        <div class="fit-status-row">
+          <div class="fit-status-left">
+            <div class="fit-status-icon warn">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f57f17" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <div style="min-width:0;">
+              <div class="fit-status-title warn">Google Fit session needs a refresh</div>
+              <div class="fit-status-sub">Tap Reconnect to resume syncing</div>
+            </div>
+          </div>
+          <div class="fit-actions">
+            <button onclick="reconnectGoogleFit()" class="fit-reconnect-btn">Reconnect</button>
+            <button onclick="disconnectGoogleFit()" class="fit-disconnect-btn">Disconnect</button>
+          </div>
+        </div>`;
+    }
+  }
+
+  function setGfitState(state) {
+    gfitState = state;
+    renderFitCard();
+  }
+
+  // Sums every step-count point across every dataset in every bucket.
+  function gfitSumSteps(data) {
+    let total = 0;
+    if (!data || !Array.isArray(data.bucket)) return 0;
+    data.bucket.forEach(bucket => {
+      if (!Array.isArray(bucket.dataset)) return;
+      bucket.dataset.forEach(dataset => {
+        if (!Array.isArray(dataset.point)) return;
+        dataset.point.forEach(point => {
+          if (Array.isArray(point.value) && point.value.length > 0) {
+            total += point.value[0].intVal || 0;
+          }
+        });
+      });
+    });
+    return total;
+  }
+
+  // Tries the officially documented merged/derived step source first
+  // (matches what the Google Fit app itself shows). If that specific
+  // request errors (not just returns zero), retries without a
+  // dataSourceId as a fallback. Logs everything for debugging.
+  async function gfitFetchTodaySteps(accessToken) {
+    const startTimeMillis = new Date().setHours(0, 0, 0, 0);
+    const endTimeMillis   = Date.now();
+
+    async function tryAggregate(withSource) {
+      const aggregateBy = withSource
+        ? [{ dataTypeName: "com.google.step_count.delta", dataSourceId: GFIT_MERGED_SOURCE }]
+        : [{ dataTypeName: "com.google.step_count.delta" }];
+
+      const res = await fetch(
+        "https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate",
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            aggregateBy,
+            bucketByTime: { durationMillis: 86400000 },
+            startTimeMillis,
+            endTimeMillis
+          })
+        }
+      );
+
+      if (res.status === 401) {
+        const err = new Error("Google Fit access token is no longer valid.");
+        err.unauthorized = true;
+        throw err;
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`Fit API responded ${res.status}: ${text.slice(0, 200)}`);
+      }
+      return res.json();
+    }
+
+    let data;
+    try {
+      data = await tryAggregate(true);
+    } catch (e) {
+      if (e.unauthorized) throw e;
+      console.warn("[GoogleFit] merged-source request failed, retrying without dataSourceId:", e.message);
+      data = await tryAggregate(false);
+    }
+
+    console.log("[GoogleFit] raw aggregate response:", data);
+    const total = gfitSumSteps(data);
+    console.log("[GoogleFit] computed total steps for today:", total);
+    return total;
+  }
+
+  // Wraps GIS's token flow in a Promise. prompt="" = silent (no popup,
+  // fails quietly if browser session/cookies don't allow it).
+  // prompt=undefined = normal interactive flow (needs a user gesture).
+  function gfitRequestToken(prompt) {
+    return new Promise((resolve) => {
+      if (typeof google === "undefined" || !google.accounts) { resolve(null); return; }
+      try {
+        const client = google.accounts.oauth2.initTokenClient({
+          client_id: GFIT_CLIENT_ID,
+          scope: GFIT_SCOPE,
+          callback: (response) => {
+            if (!response || !response.access_token) { resolve(null); return; }
+            resolve(response);
+          },
+          error_callback: () => resolve(null)
+        });
+        client.requestAccessToken(prompt === undefined ? {} : { prompt });
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
+  // Returns a valid access token, silently refreshing it if missing or
+  // about to expire. Returns null if silent refresh fails — caller
+  // decides what state to show. Does NOT clear the stored connection.
+  async function gfitGetValidToken() {
+    const now = Date.now();
+    if (gfitAccessToken && now < gfitTokenExpiresAt - 60000) {
+      return gfitAccessToken;
+    }
+    const response = await gfitRequestToken("");
+    if (!response) return null;
+    gfitAccessToken    = response.access_token;
+    gfitTokenExpiresAt = now + (response.expires_in || 3600) * 1000;
+    gfitSaveConnection();
+    return gfitAccessToken;
+  }
+
+  async function gfitApplySync(accessToken, { silent } = { silent: false }) {
+    try {
+      const totalSteps = await gfitFetchTodaySteps(accessToken);
+      if (window.DHAS_setStepsFromGoogleFit) {
+        window.DHAS_setStepsFromGoogleFit(totalSteps);
+      }
+      const lastSyncEl = document.getElementById("fitLastSync");
+      if (lastSyncEl) {
+        const timeStr = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+        lastSyncEl.textContent = `${totalSteps.toLocaleString()} steps · last synced ${timeStr}`;
+      }
+      if (!silent) {
+        showToast(`Synced ${totalSteps.toLocaleString()} steps from Google Fit.`, "success");
+      }
+      return true;
+    } catch (err) {
+      console.error("[GoogleFit] sync failed:", err);
+      if (err && err.unauthorized) {
+        // Token genuinely revoked/expired server-side — needs reconnect,
+        // but we keep the stored "was connected" flag so we show the
+        // lightweight Reconnect button, not the full onboarding card.
+        gfitAccessToken = null;
+        setGfitState("reconnect");
+      }
+      if (!silent) {
+        showToast("Unable to sync Google Fit data: " + (err && err.message ? err.message : "unknown error"), "error");
+      }
+      return false;
+    }
+  }
+
+  // ── Force an immediate re-sync (used by the poll AND by the
+  //    visibilitychange handler below) ────────────────────────
+  async function gfitSyncNow(silent) {
+    if (gfitState !== "connected" && gfitState !== "connecting") return;
+    const token = await gfitGetValidToken();
+    if (!token) {
+      setGfitState("reconnect");
+      stopGfitPolling();
+      return;
+    }
+    await gfitApplySync(token, { silent });
+  }
+
+  // ── 30-second auto re-sync while the tab is visible ─────────
+  function startGfitPolling() {
+    stopGfitPolling();
+    gfitPollTimer = setInterval(() => {
+      // Browsers throttle/pause background-tab timers, so skip network
+      // calls while hidden — visibilitychange below covers that case
+      // by forcing a sync the moment the tab becomes visible again.
+      if (document.hidden) return;
+      gfitSyncNow(true);
+    }, GFIT_POLL_MS);
+  }
+  function stopGfitPolling() {
+    if (gfitPollTimer) { clearInterval(gfitPollTimer); gfitPollTimer = null; }
+  }
+
+  // setInterval is throttled/paused while the tab is hidden, so a
+  // 30s poll can silently stop firing for minutes at a time. Force a
+  // resync the instant the tab regains focus/visibility so the count
+  // never sits stale for longer than "however long the person was away".
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) gfitSyncNow(true);
+  });
+  window.addEventListener("focus", () => gfitSyncNow(true));
+
+  // ── Manual connect (button click — has user gesture) ───────
+  async function connectGoogleFit() {
+    setGfitState("connecting");
+    const response = await gfitRequestToken(undefined);
+    if (!response) {
+      showToast("Google Fit connection was cancelled or failed.", "error");
+      setGfitState("none");
+      return;
+    }
+    gfitAccessToken    = response.access_token;
+    gfitTokenExpiresAt = Date.now() + (response.expires_in || 3600) * 1000;
+
+    // FIX: save the connection as soon as we have a VALID token,
+    // regardless of whether the first sync call below happens to
+    // succeed. A transient sync failure should never force the user
+    // to click "Connect" again on next reload.
+    gfitSaveConnection();
+
+    const ok = await gfitApplySync(gfitAccessToken, { silent: false });
+    setGfitState(ok ? "connected" : gfitState === "reconnect" ? "reconnect" : "reconnect");
+    if (ok) startGfitPolling();
+  }
+
+  // ── Lightweight reconnect (from the "reconnect" state button) ──
+  async function reconnectGoogleFit() {
+    setGfitState("connecting");
+    const response = await gfitRequestToken(undefined);
+    if (!response) {
+      showToast("Reconnect was cancelled. Tap Reconnect to try again.", "error");
+      setGfitState("reconnect");
+      return;
+    }
+    gfitAccessToken    = response.access_token;
+    gfitTokenExpiresAt = Date.now() + (response.expires_in || 3600) * 1000;
+    gfitSaveConnection();
+    const ok = await gfitApplySync(gfitAccessToken, { silent: false });
+    setGfitState(ok ? "connected" : "reconnect");
+    if (ok) startGfitPolling();
+  }
+  window.reconnectGoogleFit = reconnectGoogleFit;
+
+  // ── Silent reconnect on page load ───────────────────────────
+  async function gfitTrySilentReconnect() {
+    const record = gfitLoadConnection();
+    if (!record || !record.connected) { setGfitState("none"); return; }
+
+    setGfitState("connecting");
+    const token = await gfitGetValidToken();
+    if (!token) {
+      // Silent refresh failed — keep the stored connection, just show
+      // the lightweight reconnect button instead of wiping everything
+      // and showing the full onboarding card again.
+      setGfitState("reconnect");
+      return;
+    }
+    const ok = await gfitApplySync(token, { silent: true });
+    if (ok) {
+      setGfitState("connected");
+      startGfitPolling();
+    } else {
+      setGfitState("reconnect");
+    }
+  }
+
+  // ── Disconnect (explicit user action — this is the ONLY path
+  //    that clears the stored connection) ──────────────────────
+  function disconnectGoogleFit() {
+    stopGfitPolling();
+    if (gfitAccessToken && typeof google !== "undefined" && google.accounts && google.accounts.oauth2.revoke) {
+      try { google.accounts.oauth2.revoke(gfitAccessToken, () => {}); } catch (e) {}
+    }
+    gfitAccessToken    = null;
+    gfitTokenExpiresAt = 0;
+    gfitClearConnection();
+    if (window.DHAS_clearGoogleFit) window.DHAS_clearGoogleFit();
+    setGfitState("none");
+    showToast("Disconnected from Google Fit. Switched back to on-device tracking.", "success");
+  }
+  window.disconnectGoogleFit  = disconnectGoogleFit;
+  window.connectGoogleFit     = connectGoogleFit;
+
+  // Kick off silent reconnect once GIS + steps.js hooks are ready.
+  window.addEventListener("load", () => {
+    setTimeout(gfitTrySilentReconnect, 300);
+  });
+</script>
+  <script src="js/steps.js"></script>
+</body>
+</html>
