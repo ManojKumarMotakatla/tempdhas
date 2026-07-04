@@ -180,6 +180,8 @@ function submitLogin() {
     if (data.success) {
       localStorage.setItem("dhas_doctor_token", data.token);
       localStorage.setItem("dhas_doctor",       JSON.stringify(data.doctor));
+      sessionStorage.setItem("dhas_pw_temp", password);
+
       window.location.href = "doctor_dashboard.html";
     } else {
       errBox.textContent = data.message || "Login failed.";
