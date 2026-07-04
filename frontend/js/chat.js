@@ -1802,7 +1802,7 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
       console.error("[Chat] Voice decrypt failed:", e);
       toast("Failed to play voice message.", "error");
       if (playBtn) {
-        playBtn.innerHTML = '<i class="ti ti-lock"></i>';
+        playBtn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
         playBtn.disabled  = false;
       }
     }
