@@ -36,10 +36,17 @@ const ALLOWED_MIME = new Set([
     "image/jpeg",
     "image/jpg",
     "image/png",
-    "image/webp"
+    "image/webp",
+    // Voice messages (chat.js records with one of these depending on browser support)
+    "audio/webm",
+    "audio/ogg",
+    "audio/mp4",
+    "audio/mpeg",
+    "audio/wav",
+    "audio/x-wav"
 ]);
 
-const ALLOWED_EXT = [".pdf", ".jpg", ".jpeg", ".png", ".webp"];
+const ALLOWED_EXT = [".pdf", ".jpg", ".jpeg", ".png", ".webp", ".webm", ".ogg", ".mp4", ".mp3", ".wav"];
 const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8 MB
 
 const storage = multer.diskStorage({
