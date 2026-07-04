@@ -1703,7 +1703,6 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
     if (!audio) return;
     const totalDur = bubbleEl?.dataset.totalDur || "0:00";
 
-    // Pause any other voice message currently playing
     document.querySelectorAll(".voice-bubble audio").forEach(a => {
       if (a.id !== audioId && !a.paused) {
         a.pause();
@@ -1722,22 +1721,20 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
       btn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
     }
 
-    // WhatsApp-style: elapsed time counts UP while playing.
     audio.ontimeupdate = () => {
       if (audio.duration && isFinite(audio.duration)) {
         const pct = (audio.currentTime / audio.duration * 100).toFixed(1);
-        const progressEl = document.querySelector(`#${bubbleId} .vb-progress`);
-        if (progressEl) progressEl.style.width = pct + "%";
+        const thumbEl = document.querySelector(`#${bubbleId} .vb-thumb`);
+        if (thumbEl) thumbEl.style.left = pct + "%";
       }
       const durEl = document.getElementById(audioId.replace("voice-audio-", "vbd-"));
       if (durEl) durEl.textContent = formatRecordTime(Math.floor(audio.currentTime));
     };
 
-    // On finish, revert the label back to the total clip length.
     audio.onended = () => {
       btn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
-      const progressEl = document.querySelector(`#${bubbleId} .vb-progress`);
-      if (progressEl) progressEl.style.width = "0%";
+      const thumbEl = document.querySelector(`#${bubbleId} .vb-thumb`);
+      if (thumbEl) thumbEl.style.left = "0%";
       const durEl = document.getElementById(audioId.replace("voice-audio-", "vbd-"));
       if (durEl) durEl.textContent = totalDur;
       audio.currentTime = 0;
