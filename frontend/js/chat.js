@@ -1646,16 +1646,15 @@
     return bars;
   }
 
-  function buildVoiceBubble(m) {
-    const dur   = m.content || "0:00";   // stored as "M:SS"
+function buildVoiceBubble(m) {
+    const dur   = m.content || "0:00";   // total duration, stored at record time
     const seed  = m.id || Math.random();
     const bars  = generateWaveBars(seed, 28);
     const isEnc = m.is_encrypted && m.file_iv;
     const audioId = `voice-audio-${m.id}`;
 
     if (isEnc) {
-      // Encrypted: show a decrypt-to-play button
-      return `<div class="voice-bubble" id="vb-${m.id}">
+      return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
         <button class="vb-play-btn" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})" title="Tap to decrypt &amp; play">
           <i class="ti ti-lock"></i>
         </button>
@@ -1663,14 +1662,13 @@
           <div class="vb-progress" style="width:0%"></div>
           <div class="vb-bars">${bars}</div>
         </div>
-        <span class="vb-dur">${escapeHTML(dur)}</span>
+        <span class="vb-dur" id="vbd-${m.id}">${escapeHTML(dur)}</span>
       </div>`;
     }
 
-    // Plain audio
     const fileUrl = m.file_data || m.file_url || "";
     const src     = fileUrl.startsWith("http") ? fileUrl : BASE + fileUrl;
-    return `<div class="voice-bubble" id="vb-${m.id}">
+    return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
       <audio id="${audioId}" src="${src}" preload="none" style="display:none"></audio>
       <button class="vb-play-btn" onclick="DHAS_CHAT.toggleVoicePlay('${audioId}','vb-${m.id}',this)" title="Play voice message">
         <i class="ti ti-player-play-filled"></i>
@@ -1681,14 +1679,31 @@
       </div>
       <span class="vb-dur" id="vbd-${m.id}">${escapeHTML(dur)}</span>
     </div>`;
+}
+
+// Works around a Chromium bug: MediaRecorder-produced webm/opus blobs often
+// report audio.duration === Infinity until the browser is forced to scan
+// to the end once. Without this, the progress bar/elapsed time can misbehave
+// on long clips. Safe no-op if duration is already correct.
+function fixInfiniteDuration(audio) {
+  if (audio.duration === Infinity || isNaN(audio.duration)) {
+    audio.currentTime = 1e101;
+    const onTU = () => {
+      audio.removeEventListener("timeupdate", onTU);
+      audio.currentTime = 0;
+    };
+    audio.addEventListener("timeupdate", onTU);
   }
+}
 
-  // Play/pause a voice bubble
-  function toggleVoicePlay(audioId, bubbleId, btn) {
-    const audio = document.getElementById(audioId);
+// Play/pause a voice bubble
+function toggleVoicePlay(audioId, bubbleId, btn) {
+    const audio    = document.getElementById(audioId);
+    const bubbleEl = document.getElementById(bubbleId);
     if (!audio) return;
+    const totalDur = bubbleEl?.dataset.totalDur || "0:00";
 
-    // Pause all other audio elements
+    // Pause any other voice message currently playing
     document.querySelectorAll(".voice-bubble audio").forEach(a => {
       if (a.id !== audioId && !a.paused) {
         a.pause();
@@ -1699,6 +1714,7 @@
     });
 
     if (audio.paused) {
+      fixInfiniteDuration(audio);
       audio.play().catch(() => toast("Cannot play voice message.", "error"));
       btn.innerHTML = '<i class="ti ti-player-pause-filled"></i>';
     } else {
@@ -1706,26 +1722,27 @@
       btn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
     }
 
-    // Progress tracking
+    // WhatsApp-style: elapsed time counts UP while playing.
     audio.ontimeupdate = () => {
-      if (!audio.duration) return;
-      const pct = (audio.currentTime / audio.duration * 100).toFixed(1);
-      const progressEl = document.querySelector(`#${bubbleId} .vb-progress`);
-      if (progressEl) progressEl.style.width = pct + "%";
-      const durEl = document.getElementById(audioId.replace("voice-audio-", "vbd-"));
-      if (durEl) {
-        const rem = audio.duration - audio.currentTime;
-        durEl.textContent = "-" + formatRecordTime(Math.ceil(rem));
+      if (audio.duration && isFinite(audio.duration)) {
+        const pct = (audio.currentTime / audio.duration * 100).toFixed(1);
+        const progressEl = document.querySelector(`#${bubbleId} .vb-progress`);
+        if (progressEl) progressEl.style.width = pct + "%";
       }
+      const durEl = document.getElementById(audioId.replace("voice-audio-", "vbd-"));
+      if (durEl) durEl.textContent = formatRecordTime(Math.floor(audio.currentTime));
     };
+
+    // On finish, revert the label back to the total clip length.
     audio.onended = () => {
       btn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
       const progressEl = document.querySelector(`#${bubbleId} .vb-progress`);
       if (progressEl) progressEl.style.width = "0%";
       const durEl = document.getElementById(audioId.replace("voice-audio-", "vbd-"));
-      if (durEl) durEl.textContent = audio.dataset.origDur || "0:00";
+      if (durEl) durEl.textContent = totalDur;
+      audio.currentTime = 0;
     };
-  }
+}
 
   function seekVoice(event, audioId, bubbleId) {
     const audio  = document.getElementById(audioId);
