@@ -378,7 +378,7 @@
   // ══════════════════════════════════════════════════════════
 
   const GFIT_CLIENT_ID     = "935050379586-3vj8chtqv922uqmqurgknmtdseh0vlpv.apps.googleusercontent.com";
-  const GFIT_SCOPE         = "https://www.googleapis.com/auth/fitness.activity.read";
+  const GFIT_SCOPE         = "https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/userinfo.email";
   const GFIT_STORAGE_KEY   = "dhas_googlefit_connection_v2";
   const GFIT_POLL_MS       = 30 * 1000; // NEW: every 30 seconds — steps now update live
   const GFIT_MERGED_SOURCE = "derived:com.google.step_count.delta:com.google.android.gms:estimated_steps";
@@ -388,6 +388,7 @@
   let gfitPollTimer       = null;
   let gfitState           = "checking"; // checking | none | connecting | connected | reconnect
   let gfitSilentFailCount = 0;          // NEW — tracks consecutive blocked/failed silent refreshes
+  let gfitConnectedEmail  = null;       // NEW — which Google account this token belongs to
 
   function gfitLoadConnection() {
     try { return JSON.parse(localStorage.getItem(GFIT_STORAGE_KEY) || "null"); }
@@ -443,6 +444,9 @@
         </div>`;
 
     } else if (gfitState === "connected") {
+      const emailLine = gfitConnectedEmail
+        ? `<div style="font-size:.72rem;color:var(--text-muted,#6b7fa3);margin-top:2px;">Connected as ${gfitConnectedEmail}</div>`
+        : "";
       el.innerHTML = `
         <div class="fit-status-row">
           <div class="fit-status-left">
@@ -452,9 +456,11 @@
             <div style="min-width:0;">
               <div class="fit-status-title ok">Connected to Google Fit</div>
               <div class="fit-status-sub" id="fitLastSync">Syncing…</div>
+              ${emailLine}
             </div>
           </div>
           <div class="fit-actions">
+            <button onclick="gfitManualSync(this)" class="fit-reconnect-btn" id="fitSyncNowBtn">Sync Now</button>
             <button onclick="disconnectGoogleFit()" class="fit-disconnect-btn">Disconnect</button>
           </div>
         </div>`;
@@ -488,6 +494,25 @@
     renderFitCard();
   }
 
+  // NEW — identifies WHICH Google account this access token belongs to.
+  // The #1 cause of "Fit app shows 105 but DHAS shows 7" is that the
+  // browser popup was signed into a different Google account than the
+  // one your phone's Fit app actually syncs to — the REST API can only
+  // ever see data belonging to the account that granted the token.
+  async function gfitFetchAccountEmail(accessToken) {
+    try {
+      const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+        headers: { "Authorization": `Bearer ${accessToken}` },
+        cache: "no-store"
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.email || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Sums every step-count point across every dataset in every bucket.
   function gfitSumSteps(data) {
     let total = 0;
@@ -506,18 +531,31 @@
     return total;
   }
 
-  // Query WITHOUT a dataSourceId first — aggregates across every step
-  // source Google has (phone sensor, Fit app, wearables), which is
-  // what the Fit app's own total effectively reflects and updates
-  // fastest. Falls back to the specific merged/derived source only if
-  // the unrestricted query itself errors out.
+  // FIX: query BOTH the unrestricted aggregate AND the specific
+  // "estimated_steps" merged source (the one the Fit app itself reads
+  // from), then take the HIGHER of the two totals.
+  //
+  // Why: depending on the phone/account, either query alone can
+  // under-report — the unrestricted query sometimes returns a stale/
+  // partial merge, while the specific estimated_steps source is what
+  // the Fit app UI actually displays. Taking the max avoids ever
+  // showing DHAS's number LOWER than what's really on the phone,
+  // without guessing which single source is "correct" up front.
+  //
+  // NOTE: if the number DHAS shows is still far below your phone's
+  // Fit app (e.g. 7 vs 105), that is not something this code can fix —
+  // it means either (a) the Google account you signed into here is
+  // different from the one your phone's Fit app uses, or (b) your
+  // phone hasn't uploaded today's steps to Google's cloud yet (Fit
+  // app running in the background, screen on, battery saver off).
+  // The "Connected as" email shown on the card lets you check (a).
   async function gfitFetchTodaySteps(accessToken) {
     const startTimeMillis = new Date().setHours(0, 0, 0, 0);
     const endTimeMillis   = Date.now();
 
-    async function tryAggregate(withSource) {
-      const aggregateBy = withSource
-        ? [{ dataTypeName: "com.google.step_count.delta", dataSourceId: GFIT_MERGED_SOURCE }]
+    async function runAggregate(dataSourceId) {
+      const aggregateBy = dataSourceId
+        ? [{ dataTypeName: "com.google.step_count.delta", dataSourceId }]
         : [{ dataTypeName: "com.google.step_count.delta" }];
 
       const res = await fetch(
@@ -547,20 +585,29 @@
         const text = await res.text().catch(() => "");
         throw new Error(`Fit API responded ${res.status}: ${text.slice(0, 200)}`);
       }
-      return res.json();
+      return gfitSumSteps(await res.json());
     }
 
-    let data;
-    try {
-      data = await tryAggregate(false); // unrestricted — matches the Fit app total
-    } catch (e) {
-      if (e.unauthorized) throw e;
-      console.warn("[GoogleFit] unrestricted aggregate failed, trying merged derived source:", e.message);
-      data = await tryAggregate(true);
+    const [unrestrictedResult, mergedResult] = await Promise.allSettled([
+      runAggregate(null),
+      runAggregate(GFIT_MERGED_SOURCE)
+    ]);
+
+    // If BOTH calls failed with 401, the token is genuinely dead —
+    // bubble that up so gfitApplySync() can trigger a reconnect.
+    if (unrestrictedResult.status === "rejected" && mergedResult.status === "rejected") {
+      const bothUnauthorized =
+        unrestrictedResult.reason?.unauthorized || mergedResult.reason?.unauthorized;
+      const err = new Error("Both Google Fit queries failed.");
+      err.unauthorized = !!bothUnauthorized;
+      throw err;
     }
 
-    const total = gfitSumSteps(data);
-    console.log("[GoogleFit] computed total steps for today:", total);
+    const a = unrestrictedResult.status === "fulfilled" ? unrestrictedResult.value : 0;
+    const b = mergedResult.status === "fulfilled" ? mergedResult.value : 0;
+    const total = Math.max(a, b);
+
+    console.log(`[GoogleFit] unrestricted=${a}, estimated_steps=${b} → using ${total}`);
     return total;
   }
 
@@ -616,6 +663,13 @@
   // gfitState on failure here — that's handled one level up now.
   async function gfitApplySync(accessToken) {
     try {
+      // Look up the connected account once (not every 30s) so the user
+      // can verify it matches the account their phone's Fit app uses.
+      if (!gfitConnectedEmail) {
+        gfitConnectedEmail = await gfitFetchAccountEmail(accessToken);
+        if (gfitConnectedEmail) renderFitCard();
+      }
+
       const totalSteps = await gfitFetchTodaySteps(accessToken);
       if (window.DHAS_setStepsFromGoogleFit) {
         window.DHAS_setStepsFromGoogleFit(totalSteps);
@@ -733,6 +787,17 @@
   }
   window.reconnectGoogleFit = reconnectGoogleFit;
 
+  // ── NEW: manual "Sync Now" button — forces an immediate re-fetch
+  //    instead of waiting for the next 30-second tick. Useful right
+  //    after you've walked somewhere and want to see the number jump
+  //    without waiting. ──────────────────────────────────────────
+  async function gfitManualSync(btn) {
+    if (btn) { btn.disabled = true; btn.textContent = "Syncing…"; }
+    await gfitSyncNow();
+    if (btn) { btn.disabled = false; btn.textContent = "Sync Now"; }
+  }
+  window.gfitManualSync = gfitManualSync;
+
   // ── Silent reconnect on page load — never shows an error state.
   //    If the very first silent check fails, gfitSyncNow() (called
   //    below) will now correctly land in "reconnect" instead of
@@ -756,6 +821,7 @@
     gfitAccessToken     = null;
     gfitTokenExpiresAt  = 0;
     gfitSilentFailCount = 0;
+    gfitConnectedEmail  = null;
     gfitClearConnection();
     if (window.DHAS_clearGoogleFit) window.DHAS_clearGoogleFit();
     setGfitState("none");
