@@ -178,13 +178,17 @@
   }
 
   // ── E2E crypto init ──────────────────────────────────────────
-  try {
-    DHAS_CRYPTO.init(BASE, ME.token).catch(err => {
+
+try {
+    const _pw = sessionStorage.getItem("dhas_pw_temp");
+    DHAS_CRYPTO.initWithPassword(BASE, ME.token, _pw).catch(err => {
       console.warn("[Chat] Crypto init failed:", err);
+    }).finally(() => {
+      sessionStorage.removeItem("dhas_pw_temp"); // don't keep plaintext pw around
     });
-  } catch (err) {
+} catch (err) {
     console.warn("[Chat] Crypto init threw synchronously:", err);
-  }
+}
 
   // ── Socket setup ─────────────────────────────────────────────
   function connectSocket() {
