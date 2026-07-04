@@ -344,41 +344,50 @@
   }
 
   // ══════════════════════════════════════════════════════════
-  // GOOGLE FIT INTEGRATION — v6
+  // GOOGLE FIT INTEGRATION — v7
   //
-  // FIXES vs v5:
+  // FIX vs v6 (root cause of "steps frozen" + endless GSI_LOGGER
+  // popup-blocked errors):
   //
-  // 1. "Syncing…" stuck forever with no feedback:
-  //    The last-synced label only updated on a SUCCESSFUL sync.
-  //    A silently-failing background sync (no error UI, per design)
-  //    left "Syncing…" frozen with zero signal it was even trying.
-  //    Fixed: the label now updates after EVERY attempt — showing
-  //    either "X steps · synced HH:MM" (success) or
-  //    "Last checked HH:MM — retrying…" (failure) — still calm,
-  //    no red banners, no reconnect buttons, but no longer a lie.
+  //   Google Identity Services' silent token refresh
+  //   (requestAccessToken({prompt:""})) will fall back to opening
+  //   an actual popup window whenever it cannot renew the token
+  //   purely from existing session cookies (this is expected and
+  //   common — it happens as soon as the ~1 hour access token
+  //   expires, or whenever third-party cookies are restricted,
+  //   which is increasingly the default in modern browsers).
   //
-  // 2. Step count stuck low (e.g. 7) vs the real Fit app total (70):
-  //    We were querying ONE specific derived data source
-  //    ("estimated_steps") first. That single merged source can lag
-  //    minutes behind what the Fit app shows, because it depends on
-  //    Google's cloud sync of that specific stream. Fixed: we now
-  //    query WITHOUT a dataSourceId first — this aggregates across
-  //    ALL step sources Google has for the account, which is what
-  //    the Fit app itself effectively shows, and updates faster. The
-  //    single derived source is now only a fallback if the
-  //    unrestricted query itself errors out.
+  //   v6 called this silent refresh from setInterval / focus /
+  //   visibilitychange handlers — none of which count as a "user
+  //   gesture" — so the resulting popup was ALWAYS blocked by the
+  //   browser. The code then just relabelled the sync line to
+  //   "retrying…" and tried again a minute later, which failed
+  //   the exact same way forever. Net effect: steps silently
+  //   stopped updating after the first token expiry, with no
+  //   real feedback beyond a wall of console warnings.
+  //
+  //   FIX: a failed silent refresh now immediately switches the
+  //   card into a 4th UI state — "reconnect" — with a real button.
+  //   Clicking that button IS a user gesture, so the interactive
+  //   OAuth popup is allowed through normally. Background timers
+  //   (poll / focus / visibility) no longer attempt silent
+  //   refreshes at all while in this state, so there is no more
+  //   popup-blocked spam. This mirrors the same "never treat a
+  //   failed silent reconnect as ostensibly still-working" lesson
+  //   already applied elsewhere in DHAS's auth flow.
   // ══════════════════════════════════════════════════════════
 
   const GFIT_CLIENT_ID     = "935050379586-3vj8chtqv922uqmqurgknmtdseh0vlpv.apps.googleusercontent.com";
   const GFIT_SCOPE         = "https://www.googleapis.com/auth/fitness.activity.read";
   const GFIT_STORAGE_KEY   = "dhas_googlefit_connection_v2";
-  const GFIT_POLL_MS       = 60 * 1000; // exactly 1 minute
+  const GFIT_POLL_MS       = 30 * 1000; // NEW: every 30 seconds — steps now update live
   const GFIT_MERGED_SOURCE = "derived:com.google.step_count.delta:com.google.android.gms:estimated_steps";
 
-  let gfitAccessToken    = null;
-  let gfitTokenExpiresAt = 0;
-  let gfitPollTimer      = null;
-  let gfitState          = "checking"; // checking | none | connecting | connected
+  let gfitAccessToken     = null;
+  let gfitTokenExpiresAt  = 0;
+  let gfitPollTimer       = null;
+  let gfitState           = "checking"; // checking | none | connecting | connected | reconnect
+  let gfitSilentFailCount = 0;          // NEW — tracks consecutive blocked/failed silent refreshes
 
   function gfitLoadConnection() {
     try { return JSON.parse(localStorage.getItem(GFIT_STORAGE_KEY) || "null"); }
@@ -391,7 +400,7 @@
     try { localStorage.removeItem(GFIT_STORAGE_KEY); } catch (e) {}
   }
 
-  // ── Card rendering — only 4 possible states, no "reconnect" ──
+  // ── Card rendering — 5 possible states now (added "reconnect") ──
   function renderFitCard() {
     const el = document.getElementById("fitCardContent");
     if (!el) return;
@@ -449,6 +458,28 @@
             <button onclick="disconnectGoogleFit()" class="fit-disconnect-btn">Disconnect</button>
           </div>
         </div>`;
+
+    } else if (gfitState === "reconnect") {
+      // NEW STATE — shown the moment a silent token refresh fails.
+      // This is a lightweight inline prompt, NOT the full "Connect"
+      // onboarding card — the connection itself is still remembered,
+      // it just needs one click to renew the expired Google session.
+      el.innerHTML = `
+        <div class="fit-status-row">
+          <div class="fit-status-left">
+            <div class="fit-status-icon warn">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f57f17" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg>
+            </div>
+            <div style="min-width:0;">
+              <div class="fit-status-title warn">Google Fit session expired</div>
+              <div class="fit-status-sub">Tap Reconnect to resume live step syncing.</div>
+            </div>
+          </div>
+          <div class="fit-actions">
+            <button onclick="reconnectGoogleFit()" class="fit-reconnect-btn">Reconnect</button>
+            <button onclick="disconnectGoogleFit()" class="fit-disconnect-btn">Disconnect</button>
+          </div>
+        </div>`;
     }
   }
 
@@ -475,12 +506,11 @@
     return total;
   }
 
-  // FIX: query WITHOUT a dataSourceId FIRST — this aggregates across
-  // every step source Google has (phone sensor, Fit app, wearables),
-  // which is what the Fit app's own total effectively reflects and
-  // updates much faster than any single derived source. Only fall
-  // back to the specific merged/derived source if the unrestricted
-  // query itself errors (not just returns a smaller number).
+  // Query WITHOUT a dataSourceId first — aggregates across every step
+  // source Google has (phone sensor, Fit app, wearables), which is
+  // what the Fit app's own total effectively reflects and updates
+  // fastest. Falls back to the specific merged/derived source only if
+  // the unrestricted query itself errors out.
   async function gfitFetchTodaySteps(accessToken) {
     const startTimeMillis = new Date().setHours(0, 0, 0, 0);
     const endTimeMillis   = Date.now();
@@ -529,14 +559,18 @@
       data = await tryAggregate(true);
     }
 
-    console.log("[GoogleFit] raw aggregate response:", data);
     const total = gfitSumSteps(data);
     console.log("[GoogleFit] computed total steps for today:", total);
     return total;
   }
 
-  // Wraps GIS's token flow in a Promise. prompt="" = silent (no popup).
-  // prompt=undefined = interactive (needs a user gesture, first connect only).
+  // Wraps GIS's token flow in a Promise.
+  //   prompt=""        → silent, NEVER call this from a timer/focus
+  //                       handler without expecting it may fail —
+  //                       see gfitGetValidToken() below.
+  //   prompt=undefined  → interactive, MUST be called from a direct
+  //                       user gesture (click) or the resulting
+  //                       popup will be blocked by the browser.
   function gfitRequestToken(prompt) {
     return new Promise((resolve) => {
       if (typeof google === "undefined" || !google.accounts) { resolve(null); return; }
@@ -558,7 +592,8 @@
   }
 
   // Returns a valid access token, silently refreshing if missing/expiring.
-  // Returns null on failure — NEVER touches gfitState or the UI itself.
+  // Returns null on failure — NEVER touches gfitState itself; the
+  // caller (gfitSyncNow) decides what to do with a null result.
   async function gfitGetValidToken() {
     const now = Date.now();
     if (gfitAccessToken && now < gfitTokenExpiresAt - 60000) {
@@ -572,16 +607,13 @@
     return gfitAccessToken;
   }
 
-  // Small helper — always paints SOME feedback into the sub-label,
-  // success or failure, so "Syncing…" never sits frozen forever.
   function gfitPaintSyncLabel(text) {
     const el = document.getElementById("fitLastSync");
     if (el) el.textContent = text;
   }
 
-  // Runs one sync attempt. NEVER changes gfitState on failure — the
-  // card always stays on "Connected" once shown. The label is always
-  // updated though, so failures are visible without being alarming.
+  // Runs one sync attempt using an ALREADY-VALID token. Never changes
+  // gfitState on failure here — that's handled one level up now.
   async function gfitApplySync(accessToken) {
     try {
       const totalSteps = await gfitFetchTodaySteps(accessToken);
@@ -592,29 +624,43 @@
       gfitPaintSyncLabel(`${totalSteps.toLocaleString()} steps · synced ${timeStr}`);
       return true;
     } catch (err) {
-      console.warn("[GoogleFit] sync attempt failed (will retry in 1 min):", err.message);
-      if (err && err.unauthorized) gfitAccessToken = null; // force a fresh silent token next cycle
-      const timeStr = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-      gfitPaintSyncLabel(`Last checked ${timeStr} — retrying…`);
-      return false;
+      console.warn("[GoogleFit] sync attempt failed:", err.message);
+      if (err && err.unauthorized) gfitAccessToken = null; // force a fresh token attempt next time
+      throw err;
     }
   }
 
   // ── Single entry point for every sync trigger (poll / focus /
-  //    visibility / manual connect). Always silent from the UI's
-  //    point of view — no state flips on failure. ──────────────
+  //    visibility / manual connect). ───────────────────────────
+  //
+  // FIX: a failed silent token refresh now immediately flips the
+  // card to the "reconnect" state and STOPS the background poll,
+  // instead of quietly retrying forever from a context that can
+  // never succeed (no user gesture → popup always blocked).
   async function gfitSyncNow() {
     if (gfitState !== "connected" && gfitState !== "connecting") return;
+
     const token = await gfitGetValidToken();
     if (!token) {
-      const timeStr = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-      gfitPaintSyncLabel(`Last checked ${timeStr} — retrying…`);
+      gfitSilentFailCount++;
+      console.warn(`[GoogleFit] Silent refresh failed (attempt ${gfitSilentFailCount}) — switching to Reconnect.`);
+      stopGfitPolling();
+      setGfitState("reconnect");
       return;
     }
-    await gfitApplySync(token);
+
+    gfitSilentFailCount = 0;
+    try {
+      await gfitApplySync(token);
+    } catch (e) {
+      // A concrete API failure (not a token problem) — surface it
+      // without tearing down the connection; try again next cycle.
+      const timeStr = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+      gfitPaintSyncLabel(`Last checked ${timeStr} — retrying…`);
+    }
   }
 
-  // ── Strict 1-minute auto re-sync, always running once connected ──
+  // ── Strict 30-second auto re-sync, only while genuinely connected ──
   function startGfitPolling() {
     stopGfitPolling();
     gfitPollTimer = setInterval(() => { gfitSyncNow(); }, GFIT_POLL_MS);
@@ -623,14 +669,16 @@
     if (gfitPollTimer) { clearInterval(gfitPollTimer); gfitPollTimer = null; }
   }
 
-  // Force an immediate resync when the tab regains focus/visibility,
-  // since background timers get throttled by the browser.
+  // Force an immediate resync when the tab regains focus/visibility.
+  // Guarded inside gfitSyncNow() itself (only runs while "connected"),
+  // so this is a no-op while sitting in "reconnect" — it will NOT
+  // spam more blocked popups just because the user switched tabs.
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) gfitSyncNow();
   });
   window.addEventListener("focus", () => gfitSyncNow());
 
-  // ── Manual connect (button click — has a user gesture) ─────
+  // ── Manual connect (button click — has a real user gesture) ─────
   async function connectGoogleFit() {
     setGfitState("connecting");
     const response = await gfitRequestToken(undefined);
@@ -639,18 +687,56 @@
       setGfitState("none");
       return;
     }
-    gfitAccessToken    = response.access_token;
-    gfitTokenExpiresAt = Date.now() + (response.expires_in || 3600) * 1000;
+    gfitAccessToken     = response.access_token;
+    gfitTokenExpiresAt  = Date.now() + (response.expires_in || 3600) * 1000;
+    gfitSilentFailCount = 0;
     gfitSaveConnection();
 
     setGfitState("connected");
-    await gfitApplySync(gfitAccessToken);
+    try {
+      await gfitApplySync(gfitAccessToken);
+    } catch (e) {
+      gfitPaintSyncLabel("Connected — waiting for first sync…");
+    }
     startGfitPolling();
     showToast("Connected to Google Fit.", "success");
   }
   window.connectGoogleFit = connectGoogleFit;
 
-  // ── Silent reconnect on page load — never shows an error state ──
+  // ── NEW: Reconnect (button click — also a real user gesture) ────
+  // This is the fix for the "always blocked popup" bug: an
+  // interactive requestAccessToken() call made directly inside a
+  // click handler is allowed by the browser's popup blocker, unlike
+  // the same call made from setInterval/focus/visibilitychange.
+  async function reconnectGoogleFit() {
+    setGfitState("connecting");
+    const response = await gfitRequestToken(undefined);
+    if (!response) {
+      showToast("Reconnection was cancelled or failed. Please try again.", "error");
+      setGfitState("reconnect");
+      return;
+    }
+    gfitAccessToken     = response.access_token;
+    gfitTokenExpiresAt  = Date.now() + (response.expires_in || 3600) * 1000;
+    gfitSilentFailCount = 0;
+    gfitSaveConnection();
+
+    setGfitState("connected");
+    try {
+      await gfitApplySync(gfitAccessToken);
+      showToast("Reconnected to Google Fit — steps updated.", "success");
+    } catch (e) {
+      gfitPaintSyncLabel("Reconnected — waiting for first sync…");
+      showToast("Reconnected to Google Fit.", "success");
+    }
+    startGfitPolling();
+  }
+  window.reconnectGoogleFit = reconnectGoogleFit;
+
+  // ── Silent reconnect on page load — never shows an error state.
+  //    If the very first silent check fails, gfitSyncNow() (called
+  //    below) will now correctly land in "reconnect" instead of
+  //    silently spinning forever. ──────────────────────────────
   async function gfitTrySilentReconnect() {
     const record = gfitLoadConnection();
     if (!record || !record.connected) { setGfitState("none"); return; }
@@ -667,8 +753,9 @@
     if (gfitAccessToken && typeof google !== "undefined" && google.accounts && google.accounts.oauth2.revoke) {
       try { google.accounts.oauth2.revoke(gfitAccessToken, () => {}); } catch (e) {}
     }
-    gfitAccessToken    = null;
-    gfitTokenExpiresAt = 0;
+    gfitAccessToken     = null;
+    gfitTokenExpiresAt  = 0;
+    gfitSilentFailCount = 0;
     gfitClearConnection();
     if (window.DHAS_clearGoogleFit) window.DHAS_clearGoogleFit();
     setGfitState("none");
