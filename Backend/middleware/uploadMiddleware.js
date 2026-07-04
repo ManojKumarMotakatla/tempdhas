@@ -70,7 +70,10 @@ const storage = multer.diskStorage({
 });
 
 function fileFilter(req, file, cb) {
-    if (!ALLOWED_MIME.has(file.mimetype)) {
+    // Strip any ";codecs=..." parameter before checking, since MediaRecorder
+    // sends e.g. "audio/webm;codecs=opus" but we only allowlist base types.
+    const baseMime = (file.mimetype || "").split(";")[0].trim();
+    if (!ALLOWED_MIME.has(baseMime)) {
         return cb(new Error("UNSUPPORTED_FILE_TYPE"));
     }
     cb(null, true);
