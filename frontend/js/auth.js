@@ -47,6 +47,7 @@ function handleLogin(email, password) {
         if (data.success) {
             localStorage.setItem("dhas_token", data.token);
             localStorage.setItem("dhas_user",  JSON.stringify(data.user));
+            sessionStorage.setItem("dhas_pw_temp", password);
             window.location.href = "dashboard.html";
 
         } else if (data.notRegistered) {
