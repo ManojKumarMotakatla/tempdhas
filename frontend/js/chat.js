@@ -1893,6 +1893,40 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
     handleBack();
   });
 
+  function buildVoiceBubble(m) {
+    const dur   = m.content || "0:00";
+    const seed  = m.id || Math.random();
+    const bars  = generateWaveBars(seed, 28);
+    const isEnc = m.is_encrypted && m.file_iv;
+    const audioId = `voice-audio-${m.id}`;
+
+    if (isEnc) {
+      return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
+        <button class="vb-play-btn" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})" title="Tap to decrypt &amp; play">
+          <i class="ti ti-lock"></i>
+        </button>
+        <div class="vb-waveform" style="cursor:pointer;position:relative;" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})">
+          <div class="vb-thumb" style="left:0%"></div>
+          <div class="vb-bars">${bars}</div>
+        </div>
+        <span class="vb-dur" id="vbd-${m.id}">${escapeHTML(dur)}</span>
+      </div>`;
+    }
+
+    const fileUrl = m.file_data || m.file_url || "";
+    const src     = fileUrl.startsWith("http") ? fileUrl : BASE + fileUrl;
+    return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
+      <audio id="${audioId}" src="${src}" preload="none" style="display:none"></audio>
+      <button class="vb-play-btn" onclick="DHAS_CHAT.toggleVoicePlay('${audioId}','vb-${m.id}',this)" title="Play voice message">
+        <i class="ti ti-player-play-filled"></i>
+      </button>
+      <div class="vb-waveform" style="position:relative;" onclick="DHAS_CHAT.seekVoice(event,'${audioId}','vb-${m.id}')">
+        <div class="vb-thumb" style="left:0%"></div>
+        <div class="vb-bars">${bars}</div>
+      </div>
+      <span class="vb-dur" id="vbd-${m.id}">${escapeHTML(dur)}</span>
+    </div>`;
+}
   // ── Init ──────────────────────────────────────────────────────
   (async function init() {
     try {
