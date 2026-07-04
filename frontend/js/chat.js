@@ -1660,7 +1660,7 @@ function buildVoiceBubble(m) {
     if (isEnc) {
       return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
         <button class="vb-play-btn" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})" title="Tap to decrypt &amp; play">
-          <i class="ti ti-lock"></i>
+          <i class="ti ti-player-play-filled"></i>
         </button>
         <div class="vb-waveform" style="cursor:pointer" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})">
           <div class="vb-progress" style="width:0%"></div>
@@ -1904,7 +1904,7 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
     if (isEnc) {
       return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
         <button class="vb-play-btn" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})" title="Tap to decrypt &amp; play">
-          <i class="ti ti-lock"></i>
+          <i class="ti ti-player-play-filled"></i>
         </button>
         <div class="vb-waveform" style="cursor:pointer;position:relative;" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})">
           <div class="vb-thumb" style="left:0%"></div>
