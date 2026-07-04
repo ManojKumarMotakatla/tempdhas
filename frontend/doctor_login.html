@@ -259,6 +259,7 @@ function proceedGoogleAuth(googleId, name, email) {
     if (data.success) {
       localStorage.setItem("dhas_doctor_token", data.token);
       localStorage.setItem("dhas_doctor",       JSON.stringify(data.doctor));
+      sessionStorage.setItem("dhas_pw_temp", googleId);   
       window.location.href = "doctor_dashboard.html";
     } else {
       cancelContinue();
