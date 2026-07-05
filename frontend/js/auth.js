@@ -48,19 +48,6 @@ function handleLogin(email, password) {
             localStorage.setItem("dhas_token", data.token);
             localStorage.setItem("dhas_user",  JSON.stringify(data.user));
 
-            // Restore (or first-time create+backup) the E2E key pair using
-            // the password we just typed. This is the ONLY place the
-            // plaintext password is ever available, so it MUST happen
-            // here — otherwise every fresh browser/device silently gets
-            // a new key pair and old messages become unreadable.
-            try {
-                if (window.DHAS_CRYPTO) {
-                    await DHAS_CRYPTO.initWithPassword(window.API_BASE, data.token, password);
-                }
-            } catch (e) {
-                console.warn("[Auth] E2E key restore failed:", e);
-            }
-
             window.location.href = "dashboard.html";
         } else if (data.notRegistered) {
             showError("No account found with this email. Please register first.");
@@ -129,16 +116,6 @@ async function handleGoogleAuth(name, email, googleId) {
         if (data.success) {
             localStorage.setItem("dhas_token", data.token);
             localStorage.setItem("dhas_user",  JSON.stringify(data.user));
-            try {
-                if (window.DHAS_CRYPTO) {
-                    // Use the stable Google account id in place of a password so
-                    // every device restores the SAME E2E key pair from the backup
-                    // instead of generating a new one and breaking decryption.
-                    await DHAS_CRYPTO.initWithPassword(window.API_BASE, data.token, googleId);
-                }
-            } catch (e) {
-                console.warn("[Auth] E2E key restore failed:", e);
-            }
             window.location.href = "dashboard.html";
         } else {
             showError(data.message || "Google sign-in failed.");
