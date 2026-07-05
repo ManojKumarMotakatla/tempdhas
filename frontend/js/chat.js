@@ -1473,6 +1473,7 @@
     mediaRecorder.start(100); // collect chunks every 100ms
     isRecording = true;
     recordingSeconds = 0;
+    recordingStartedAt = Date.now();
 
     // Show recording UI
     if (elVoiceBtn) {
@@ -1499,7 +1500,8 @@
     if (!mediaRecorder || !isRecording) return;
 
     // Capture duration NOW before anything resets it
-    const capturedSeconds = recordingSeconds;
+    const capturedSeconds = Math.max(1, Math.round((Date.now() - recordingStartedAt) / 1000));
+
 
     clearInterval(recordingTimer);
     recordingTimer = null;
@@ -1718,12 +1720,22 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
 
     if (audio.paused) {
       fixInfiniteDuration(audio);
-      audio.play().catch(() => toast("Cannot play voice message.", "error"));
-      btn.innerHTML = '<i class="ti ti-player-pause-filled"></i>';
+      btn.disabled = true; // avoid double-taps while we find out if play works
+      audio.play()
+        .then(() => {
+          btn.innerHTML = '<i class="ti ti-player-pause-filled"></i>';
+        })
+        .catch((err) => {
+          console.warn("[Chat] Voice play failed:", err);
+          toast("Cannot play voice message.", "error");
+          btn.innerHTML = '<i class="ti ti-player-play-filled"></i>'; // reset, don't get stuck
+        })
+        .finally(() => { btn.disabled = false; });
     } else {
       audio.pause();
       btn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
     }
+    
 
     audio.ontimeupdate = () => {
       if (audio.duration && isFinite(audio.duration)) {
