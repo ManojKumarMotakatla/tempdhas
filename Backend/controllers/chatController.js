@@ -268,7 +268,35 @@ const serveFile = async (req, res) => {
     const filename = path.basename(req.params.filename);
     const resolved = path.join(UPLOAD_ROOT, String(room.id), filename);
     if (!fs.existsSync(resolved)) return res.status(404).json({ success: false, message: "File not found." });
-    res.setHeader("Content-Type", "application/octet-stream");
+
+    // Serve the file with its REAL mime type instead of a generic
+    // "application/octet-stream". Browsers refuse to play <audio>/<video>
+    // (and are inconsistent with <img>) when the response's Content-Type
+    // isn't a proper media type — this was the cause of voice messages
+    // failing with "Cannot play voice message." after E2E encryption
+    // (which used to manually re-wrap decrypted bytes in a correctly
+    // typed Blob client-side) was removed.
+    let contentType = null;
+    try {
+        const fileUrlPath = `/chat/file/${room.id}/${filename}`;
+        const [rows] = await db.promise().query(
+            "SELECT file_mime FROM chat_messages WHERE room_id = ? AND file_data = ? LIMIT 1",
+            [room.id, fileUrlPath]
+        );
+        if (rows.length && rows[0].file_mime) contentType = rows[0].file_mime;
+    } catch (_) { /* fall through to extension guess below */ }
+
+    if (!contentType) {
+        const ext = path.extname(filename).toLowerCase();
+        const extMap = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
+            ".pdf": "application/pdf",
+            ".webm": "audio/webm", ".mp4": "audio/mp4", ".m4a": "audio/mp4", ".ogg": "audio/ogg"
+        };
+        contentType = extMap[ext] || "application/octet-stream";
+    }
+
+    res.setHeader("Content-Type", contentType);
     res.sendFile(resolved);
 };
 
