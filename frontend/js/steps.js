@@ -1,466 +1,841 @@
 // ============================================================
-// DHAS - steps.js
-// Walk-only step detection using cadence + peak-valley filter.
-// Random phone movements / sitting / shaking do NOT count.
+// DHAS — Activity Tracker (steps.js) — v2
 //
-// FIX 1: performMidnightReset() now saves yesterday's steps
-//         into the correct slot BEFORE resetting todayIdx,
-//         instead of using Date.now()-86400000 which could
-//         produce the wrong day index near midnight boundaries.
+// Complete rewrite. Google Fit integration has been removed
+// entirely — this page is now 100% on-device sensor tracking.
 //
-// FIX 2: Removed duplicate connectGoogleFit() definition that
-//         used alert() and silently overwrote the showToast
-//         version defined in steps.html. The good version in
-//         steps.html now remains in effect at runtime.
+// Internal module layout (single file, namespaced sections):
+//   Store    → localStorage persistence, one key: dhas_activity_v1
+//   Sensor   → devicemotion walk/step detection (same proven
+//              cadence + swing algorithm as before, extracted
+//              into a standalone emitter)
+//   Engine   → pure calculations: calories, distance, score,
+//              streaks, achievements, challenges, insights
+//   UI       → all DOM rendering, cached element refs,
+//              rAF-batched updates
+//   Calendar → monthly GitHub-style activity grid
 //
-// FIX 3 (NEW): Added the Google Fit integration hooks that
-//         steps.html actually calls but that never existed
-//         here — window.DHAS_setStepsFromGoogleFit() and
-//         window.DHAS_clearGoogleFit(). Without these, every
-//         "sync" from steps.html silently did nothing: the
-//         accelerometer kept running untouched in the
-//         background, incrementing on top of (and independent
-//         from) whatever Google Fit reported, which is why the
-//         on-screen count looked "frozen per session" while the
-//         real Google Fit total kept climbing invisibly.
-//
-//         When Google Fit is the active source:
-//           - the accelerometer listener is detached (no more
-//             double counting)
-//           - `steps` is driven entirely by Google Fit's number
-//           - the source is persisted in localStorage so a page
-//             reload doesn't silently resume the accelerometer
-//         Calling DHAS_clearGoogleFit() (disconnect) resumes
-//         local accelerometer tracking from the current count.
+// Old data (dhas_steps_v4) is migrated once on first load so
+// nobody loses today's step count from the previous version.
 // ============================================================
 
-const DAILY_GOAL   = 10000;
-const WHO_GOAL     = 150;
-const STEP_STRIDE  = 0.000762;
-const CAL_PER_STEP = 0.04;
+(function () {
+"use strict";
 
-// ── Walking cadence rules ─────────────────────────────────────
-// A real walking step happens every 400–1200 ms (50–150 steps/min).
-// Faster = running/shaking. Slower = not walking.
-const MIN_STEP_MS   = 400;   // fastest plausible step
-const MAX_STEP_MS   = 1200;  // slowest plausible step
+/* ============================================================
+   CONSTANTS
+   ============================================================ */
+const DAILY_GOAL      = 10000;
+const STEP_STRIDE_KM  = 0.000762;
+const CAL_PER_STEP    = 0.04;
+const STREAK_MIN_STEPS = 3000;
+const CAL_TARGET      = 400;   // for score calc
+const DIST_TARGET_KM  = 5;
+const BRISK_MIN_TARGET = 30;
+const STORAGE_KEY     = "dhas_activity_v1";
+const HISTORY_MAX_DAYS = 400;
 
-// Require N consecutive valid-cadence steps before counting starts.
-// Kills false positives from sitting, gesturing, shaking.
+const MIN_STEP_MS   = 400;
+const MAX_STEP_MS   = 1200;
 const CONFIRM_STEPS = 2;
-
-// Low-pass filter (0–1): smooths noise without lag
 const LOW_PASS_ALPHA = 0.2;
+const MIN_SWING = 2.5;
 
-// Minimum peak-to-valley swing to register as a footfall
-const MIN_SWING = 2.5; // m/s²
-
-// ── State ────────────────────────────────────────────────────
-let steps      = 0;
-let briskSteps = 0;
-let weekData   = [0, 0, 0, 0, 0, 0, 0];
-let todayIdx   = new Date().getDay();
-
-// NEW: which source currently "owns" the step count.
-// true  = Google Fit is authoritative; accelerometer is paused.
-// false = on-device accelerometer is authoritative (default).
-let googleFitConnected = false;
-
-// Detection internals
-let filteredMag   = 0;
-let lastPeak      = 0;
-let goingUp       = true;
-let lastStepTime  = 0;
-let pendingSteps  = 0;    // consecutive valid steps (not yet confirmed)
-let walkConfirmed = false;
-let stableMovementCount = 0;
-let previousSwing = 0;
-let consistentSwingCount = 0;
-let previousFilteredMag = 0;
-
-let stillTimer = null;
-let motionListenerAttached = false; // NEW: avoid double-attaching listeners
-
-// ── Midnight reset ────────────────────────────────────────────
-function scheduleMidnightReset() {
-  const now  = new Date();
-  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
-  setTimeout(() => {
-    performMidnightReset();
-    scheduleMidnightReset();
-  }, next - now);
+function todayStr(d) {
+  d = d || new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function daysAgoStr(n) {
+  const d = new Date(); d.setDate(d.getDate() - n);
+  return todayStr(d);
 }
 
-function performMidnightReset() {
-  // FIX: save today's step count into the slot we're about to vacate
-  // BEFORE updating todayIdx. The old code used Date.now()-86400000
-  // to find yesterday's index, which is the same as the current todayIdx
-  // at the moment this runs (just after midnight). Using todayIdx directly
-  // is both correct and unambiguous.
-  weekData[todayIdx] = steps;          // archive today → becomes "yesterday"
+/* ============================================================
+   STORE — persistence layer
+   ============================================================ */
+const Store = (function () {
+  function defaultState() {
+    return {
+      version: 1,
+      today: { date: todayStr(), steps: 0, brisk: 0 },
+      week: { weekStart: getWeekStart(todayStr()), days: {} }, // { "YYYY-MM-DD": steps }
+      lifetime: {
+        steps: 0, calories: 0, distanceKm: 0,
+        highestDay: 0, totalActiveMinutes: 0,
+        totalActiveDays: 0, goalsCompleted: 0
+      },
+      streak: { current: 0, longest: 0, lastCountedDate: null },
+      achievements: [],
+      challenge: null, // { id, weekStart, type, label, target, unit }
+      history: {} // "YYYY-MM-DD": { steps, brisk, goalMet }
+    };
+  }
 
-  // Advance to the new day
-  todayIdx   = new Date().getDay();    // now points to the freshly started day
-  steps      = 0;
-  briskSteps = 0;
-  weekData[todayIdx] = 0;             // clear the new day's slot
+  function getWeekStart(dateStr) {
+    const d = new Date(dateStr + "T00:00:00");
+    d.setDate(d.getDate() - d.getDay());
+    return todayStr(d);
+  }
 
-  pendingSteps  = 0;
-  walkConfirmed = false;
+  let state = null;
 
-  // NEW: a new day always starts back on the accelerometer. If the
-  // person is still actually connected to Google Fit, steps.html's
-  // own load-time silent-reconnect will call DHAS_setStepsFromGoogleFit()
-  // again momentarily and re-pause the sensor — this just guarantees
-  // we never sit "stuck" on yesterday's Google Fit state indefinitely.
-  googleFitConnected = false;
-
-  save();
-  updateDisplay();
-  setPill("still", "Standing still");
-  startSensor();
-}
-
-// ── Load saved data ───────────────────────────────────────────
-(function loadSaved() {
-  try {
-    const saved = JSON.parse(localStorage.getItem("dhas_steps_v4") || "{}");
-    const today = new Date().toDateString();
-    if (saved.date === today) {
-      steps      = saved.steps      || 0;
-      briskSteps = saved.briskSteps || 0;
-      // NEW: remember which source produced today's count so we don't
-      // resume the accelerometer under a Google Fit total on reload.
-      if (saved.source === "googlefit") {
-        googleFitConnected = true;
+  function migrateOld() {
+    try {
+      const old = JSON.parse(localStorage.getItem("dhas_steps_v4") || "null");
+      if (!old) return null;
+      const fresh = defaultState();
+      if (old.date === new Date().toDateString()) {
+        fresh.today.steps = old.steps || 0;
+        fresh.today.brisk = old.briskSteps || 0;
       }
+      return fresh;
+    } catch (e) { return null; }
+  }
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        state = JSON.parse(raw);
+      } else {
+        state = migrateOld() || defaultState();
+      }
+    } catch (e) {
+      state = defaultState();
     }
-    weekData           = saved.weekData || [0, 0, 0, 0, 0, 0, 0];
-    weekData[todayIdx] = steps;
-  } catch (e) {}
+
+    // Roll day forward if the stored "today" is stale
+    const tstr = todayStr();
+    if (state.today.date !== tstr) {
+      rolloverDay(tstr);
+    }
+    // Roll week forward if needed
+    const wkStart = getWeekStart(tstr);
+    if (state.week.weekStart !== wkStart) {
+      state.week = { weekStart: wkStart, days: {} };
+    }
+    save();
+    return state;
+  }
+
+  function rolloverDay(newDateStr) {
+    // Finalize the day that just ended
+    const finishedDate = state.today.date;
+    const finishedSteps = state.today.steps;
+    const finishedBrisk = state.today.brisk;
+    const goalMet = finishedSteps >= DAILY_GOAL;
+
+    // History
+    state.history[finishedDate] = { steps: finishedSteps, brisk: finishedBrisk, goalMet };
+    pruneHistory();
+
+    // Lifetime
+    if (finishedSteps > 0) {
+      state.lifetime.totalActiveDays += (finishedSteps >= STREAK_MIN_STEPS) ? 1 : 0;
+      if (goalMet) state.lifetime.goalsCompleted += 1;
+      if (finishedSteps > state.lifetime.highestDay) state.lifetime.highestDay = finishedSteps;
+    }
+
+    // Streak — finalize yesterday's contribution
+    if (finishedSteps >= STREAK_MIN_STEPS && state.streak.lastCountedDate !== finishedDate) {
+      state.streak.current += 1;
+      state.streak.lastCountedDate = finishedDate;
+      if (state.streak.current > state.streak.longest) state.streak.longest = state.streak.current;
+    } else if (finishedSteps < STREAK_MIN_STEPS) {
+      state.streak.current = 0;
+    }
+
+    // Week bucket keeps this day's total too
+    state.week.days[finishedDate] = finishedSteps;
+
+    // Reset today
+    state.today = { date: newDateStr, steps: 0, brisk: 0 };
+  }
+
+  function pruneHistory() {
+    const cutoff = daysAgoStr(HISTORY_MAX_DAYS);
+    Object.keys(state.history).forEach(k => { if (k < cutoff) delete state.history[k]; });
+  }
+
+  function save() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+
+  function get() { return state; }
+
+  function addSteps(count, isBrisk) {
+    state.today.steps += count;
+    if (isBrisk) state.today.brisk += count;
+    state.lifetime.steps += count;
+    state.lifetime.calories += count * CAL_PER_STEP;
+    state.lifetime.distanceKm += count * STEP_STRIDE_KM;
+    if (count > 0) {
+      const min = Math.round(count / 100 * 10) / 10;
+      state.lifetime.totalActiveMinutes += min;
+    }
+    // Live-update today's slot in week/history views (not finalized until rollover,
+    // but we still want "today" visible in the weekly chart / calendar as it happens)
+    state.week.days[state.today.date] = state.today.steps;
+    state.history[state.today.date] = {
+      steps: state.today.steps,
+      brisk: state.today.brisk,
+      goalMet: state.today.steps >= DAILY_GOAL
+    };
+  }
+
+  function unlockAchievement(id) {
+    if (!state.achievements.includes(id)) {
+      state.achievements.push(id);
+      return true;
+    }
+    return false;
+  }
+
+  function setChallenge(ch) { state.challenge = ch; }
+
+  return { load, save, get, addSteps, unlockAchievement, setChallenge, getWeekStart };
 })();
 
-function save() {
-  weekData[todayIdx] = steps;
-  try {
-    localStorage.setItem("dhas_steps_v4", JSON.stringify({
-      date: new Date().toDateString(),
-      steps, briskSteps, weekData,
-      // NEW: persist the active source
-      source: googleFitConnected ? "googlefit" : "sensor"
-    }));
-  } catch (e) {}
-}
+/* ============================================================
+   SENSOR — walk/step detection off devicemotion
+   Same proven cadence + swing thresholds as the previous
+   implementation; just decoupled from storage/DOM.
+   ============================================================ */
+const Sensor = (function () {
+  let onStep = null;         // callback(isBrisk)
+  let onStateChange = null;  // callback("walking"|"still"|"waiting"|"unsupported")
+  let attached = false;
 
-// ── Live pill ─────────────────────────────────────────────────
-function setPill(state, text) {
-  document.getElementById("livePill").className = "live-pill " + state;
-  document.getElementById("pillText").textContent = text;
-  document.getElementById("dotPulse").style.display = state === "walking" ? "block" : "none";
-}
+  let filteredMag = 0, previousFilteredMag = 0;
+  let lastPeak = 0, goingUp = true;
+  let lastStepTime = 0, pendingSteps = 0, walkConfirmed = false;
+  let stableMovementCount = 0, previousSwing = 0, consistentSwingCount = 0;
+  let stillTimer = null;
 
-function markWalking() {
-  setPill("walking", "Walking — counting steps");
-  clearTimeout(stillTimer);
-  stillTimer = setTimeout(() => {
-    walkConfirmed = false;
-    pendingSteps  = 0;
-    setPill("still", "Standing still");
-  }, 2500);
-}
-
-// ── Core accelerometer handler ────────────────────────────────
-function onMotion(e) {
-  // NEW: while Google Fit owns the count, ignore all local motion
-  // events entirely. This is what actually stops the double-counting —
-  // previously this function ran unconditionally forever.
-  if (googleFitConnected) return;
-
-  const a = e.accelerationIncludingGravity;
-  if (!a || a.x == null) return;
-
-  const raw = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-
-  // 1. Low-pass filter — removes high-frequency vibration/noise
-  filteredMag = LOW_PASS_ALPHA * raw + (1 - LOW_PASS_ALPHA) * filteredMag;
-  const suddenJump = Math.abs(filteredMag - previousFilteredMag);
-
-  previousFilteredMag = filteredMag;
-
-  // Ignore violent sudden spikes (phone shake)
-  if (suddenJump > 6) return;
-
-  // 2. Track rising signal
-  if (filteredMag > lastPeak) {
-    lastPeak = filteredMag;
-    goingUp  = true;
+  function markWalking() {
+    onStateChange && onStateChange("walking");
+    clearTimeout(stillTimer);
+    stillTimer = setTimeout(() => {
+      walkConfirmed = false;
+      pendingSteps = 0;
+      onStateChange && onStateChange("still");
+    }, 2500);
   }
 
-  // 3. Detect peak — signal starts falling after rising
-  if (goingUp && filteredMag < lastPeak - 0.5) {
-    goingUp = false;
+  function handleMotion(e) {
+    const a = e.accelerationIncludingGravity;
+    if (!a || a.x == null) return;
 
-    const valley = filteredMag;
-    const swing  = lastPeak - valley;
-    const swingDiff = Math.abs(swing - previousSwing);
+    const raw = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+    filteredMag = LOW_PASS_ALPHA * raw + (1 - LOW_PASS_ALPHA) * filteredMag;
+    const suddenJump = Math.abs(filteredMag - previousFilteredMag);
+    previousFilteredMag = filteredMag;
+    if (suddenJump > 6) return;
 
-    if (swingDiff < 3) {
-      consistentSwingCount++;
-    } else {
-      consistentSwingCount = 0;
-    }
+    if (filteredMag > lastPeak) { lastPeak = filteredMag; goingUp = true; }
 
-    previousSwing = swing;
+    if (goingUp && filteredMag < lastPeak - 0.5) {
+      goingUp = false;
+      const valley = filteredMag;
+      const swing = lastPeak - valley;
+      const swingDiff = Math.abs(swing - previousSwing);
+      consistentSwingCount = swingDiff < 3 ? consistentSwingCount + 1 : 0;
+      previousSwing = swing;
 
-    // 4. Swing must be large enough to be a real footfall
-    if (swing >= MIN_SWING) {
-      const now      = Date.now();
-      const interval = now - lastStepTime;
+      if (swing >= MIN_SWING) {
+        const now = Date.now();
+        const interval = now - lastStepTime;
+        if (interval < 300) { lastPeak = filteredMag; return; }
 
-      if (interval < 300) return;
-
-      // 5. Cadence check — must match real walking rhythm (400–1200 ms)
-      if (lastStepTime > 0 && interval >= MIN_STEP_MS && interval <= MAX_STEP_MS) {
-        stableMovementCount++;
-        pendingSteps++;
-
-        if (
-          pendingSteps >= CONFIRM_STEPS &&
-          stableMovementCount >= 4 &&
-          consistentSwingCount >= 2
-        ) {
-          walkConfirmed = true;
-        }
-
-        if (walkConfirmed) {
-          steps++;
-          // Brisk: fast cadence + strong swing
-          if (interval >= 400 && interval <= 650 && swing > 4) {
-            briskSteps++;
+        if (lastStepTime > 0 && interval >= MIN_STEP_MS && interval <= MAX_STEP_MS) {
+          stableMovementCount++;
+          pendingSteps++;
+          if (pendingSteps >= CONFIRM_STEPS && stableMovementCount >= 4 && consistentSwingCount >= 2) {
+            walkConfirmed = true;
           }
-          markWalking();
-          save();
-          updateDisplay();
+          if (walkConfirmed) {
+            const brisk = interval >= 400 && interval <= 650 && swing > 4;
+            markWalking();
+            onStep && onStep(brisk);
+          }
+        } else if (lastStepTime > 0) {
+          pendingSteps = 0;
+          stableMovementCount = 0;
+          walkConfirmed = false;
         }
-
-      } else if (lastStepTime > 0) {
-        pendingSteps        = 0;
-        stableMovementCount = 0;
-        walkConfirmed       = false;
+        lastStepTime = now;
       }
+      lastPeak = filteredMag;
+    }
+  }
 
-      lastStepTime = now;
+  function start() {
+    if (attached) return;
+    if (typeof DeviceMotionEvent === "undefined") {
+      onStateChange && onStateChange("unsupported");
+      return;
+    }
+    if (typeof DeviceMotionEvent.requestPermission === "function") {
+      onStateChange && onStateChange("permission-needed");
+      return; // caller must invoke requestIOSPermission() from a user gesture
+    }
+    window.addEventListener("devicemotion", handleMotion);
+    attached = true;
+    onStateChange && onStateChange("still");
+  }
+
+  function requestIOSPermission() {
+    return DeviceMotionEvent.requestPermission().then(result => {
+      if (result === "granted") {
+        window.addEventListener("devicemotion", handleMotion);
+        attached = true;
+        onStateChange && onStateChange("still");
+        return true;
+      }
+      onStateChange && onStateChange("denied");
+      return false;
+    });
+  }
+
+  function stop() {
+    if (attached) window.removeEventListener("devicemotion", handleMotion);
+    attached = false;
+    clearTimeout(stillTimer);
+  }
+
+  return {
+    start, stop, requestIOSPermission,
+    set onStep(fn) { onStep = fn; },
+    set onStateChange(fn) { onStateChange = fn; }
+  };
+})();
+
+/* ============================================================
+   ENGINE — pure calculations
+   ============================================================ */
+const Engine = (function () {
+
+  function calories(steps) { return Math.round(steps * CAL_PER_STEP); }
+  function distanceKm(steps) { return steps * STEP_STRIDE_KM; }
+  function activeMinutes(steps) { return Math.round(steps / 100); }
+  function briskMinutes(briskSteps) { return Math.round(briskSteps / 120 * 10) / 10; }
+
+  function goalPct(steps) { return Math.min(steps / DAILY_GOAL, 1); }
+
+  function goalMessage(steps) {
+    if (steps >= DAILY_GOAL) return "Goal completed! Amazing work 🎉";
+    const remaining = DAILY_GOAL - steps;
+    if (remaining <= 500) return `Almost there — only ${remaining.toLocaleString()} steps left!`;
+    if (steps >= DAILY_GOAL * 0.75) return "So close — keep going!";
+    if (steps >= DAILY_GOAL * 0.4) return "Great progress today.";
+    if (steps > 0) return "Let's build some momentum.";
+    return "Let's get moving!";
+  }
+
+  function activityScore(today, lifetime) {
+    const cal = calories(today.steps);
+    const dist = distanceKm(today.steps);
+    const briskMin = briskMinutes(today.brisk);
+
+    const goalComponent   = Math.min(today.steps / DAILY_GOAL, 1) * 100;
+    const calComponent    = Math.min(cal / CAL_TARGET, 1) * 100;
+    const distComponent   = Math.min(dist / DIST_TARGET_KM, 1) * 100;
+    const briskComponent  = Math.min(briskMin / BRISK_MIN_TARGET, 1) * 100;
+
+    const score = Math.round(
+      goalComponent * 0.4 + calComponent * 0.2 + distComponent * 0.2 + briskComponent * 0.2
+    );
+
+    let label, stars;
+    if (score >= 90)      { label = "Excellent";          stars = 5; }
+    else if (score >= 75) { label = "Very Good";          stars = 4; }
+    else if (score >= 50) { label = "Good";               stars = 3; }
+    else if (score >= 25) { label = "Getting There";      stars = 2; }
+    else                  { label = "Needs Improvement";  stars = 1; }
+
+    return {
+      score, label, stars,
+      breakdown: `Goal ${Math.round(goalComponent)}% · Calories ${Math.round(calComponent)}% · Distance ${Math.round(distComponent)}% · Brisk ${Math.round(briskComponent)}%`
+    };
+  }
+
+  const ACHIEVEMENTS = [
+    { id: "first_1000",  icon: "🏅", name: "First 1,000 Steps", check: s => s.lifetime.steps >= 1000 },
+    { id: "walk_5km",     icon: "🥉", name: "Walk 5 km",         check: s => s.lifetime.distanceKm >= 5 },
+    { id: "streak_7",     icon: "🥈", name: "7-Day Streak",      check: s => s.streak.longest >= 7 },
+    { id: "burn_500",     icon: "🥇", name: "Burn 500 Calories", check: s => s.lifetime.calories >= 500 },
+    { id: "walk_100k",    icon: "👑", name: "Walk 100,000 Steps", check: s => s.lifetime.steps >= 100000 },
+    { id: "first_goal",   icon: "🚀", name: "First Goal Complete", check: s => s.lifetime.goalsCompleted >= 1 },
+    { id: "active_30",    icon: "💪", name: "30 Active Days",    check: s => s.lifetime.totalActiveDays >= 30 },
+    { id: "streak_30",    icon: "🌟", name: "30-Day Streak",     check: s => s.streak.longest >= 30 },
+    { id: "walk_10km_day",icon: "🏔️", name: "10 km in a Day",   check: s => distanceKm(s.today.steps) >= 10 }
+  ];
+
+  function checkAchievements(state) {
+    const newlyUnlocked = [];
+    ACHIEVEMENTS.forEach(a => {
+      if (a.check(state) && Store.unlockAchievement(a.id)) newlyUnlocked.push(a);
+    });
+    return newlyUnlocked;
+  }
+
+  const CHALLENGE_TEMPLATES = [
+    { type: "steps", label: "Walk 20,000 Steps this week", target: 20000, unit: "steps" },
+    { type: "calories", label: "Burn 700 Calories this week", target: 700, unit: "kcal" },
+    { type: "activeDays", label: "Walk on 5 Days this week", target: 5, unit: "days" },
+    { type: "distance", label: "Walk 10 km this week", target: 10, unit: "km" }
+  ];
+
+  function getOrCreateChallenge(state) {
+    const wkStart = state.week.weekStart;
+    if (!state.challenge || state.challenge.weekStart !== wkStart) {
+      // deterministic pick based on week start so it's stable across reloads
+      const idx = Array.from(wkStart).reduce((a, c) => a + c.charCodeAt(0), 0) % CHALLENGE_TEMPLATES.length;
+      const tmpl = CHALLENGE_TEMPLATES[idx];
+      const ch = { id: wkStart + "_" + tmpl.type, weekStart: wkStart, ...tmpl, completed: false };
+      Store.setChallenge(ch);
+      return ch;
+    }
+    return state.challenge;
+  }
+
+  function challengeProgress(state) {
+    const ch = getOrCreateChallenge(state);
+    const days = state.week.days;
+    const weekSteps = Object.values(days).reduce((a, b) => a + b, 0);
+    let progress = 0;
+    if (ch.type === "steps") progress = weekSteps;
+    else if (ch.type === "calories") progress = calories(weekSteps);
+    else if (ch.type === "distance") progress = Math.round(distanceKm(weekSteps) * 100) / 100;
+    else if (ch.type === "activeDays") progress = Object.values(days).filter(s => s >= STREAK_MIN_STEPS).length;
+
+    const pct = Math.min(progress / ch.target, 1) * 100;
+    const done = progress >= ch.target;
+    if (done && !ch.completed) { ch.completed = true; Store.setChallenge(ch); }
+    return { ch, progress, pct, done };
+  }
+
+  function weeklyInsights(state) {
+    const insights = [];
+    const days = state.week.days;
+    const weekSteps = Object.values(days).reduce((a, b) => a + b, 0);
+
+    // previous week: derive from history using date math
+    const prevWeekStart = new Date(state.week.weekStart + "T00:00:00");
+    prevWeekStart.setDate(prevWeekStart.getDate() - 7);
+    let prevWeekSteps = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(prevWeekStart); d.setDate(d.getDate() + i);
+      const key = todayStr(d);
+      if (state.history[key]) prevWeekSteps += state.history[key].steps || 0;
     }
 
-    // Reset peak for next cycle
-    lastPeak = filteredMag;
-  }
-}
-
-// ── Sensor start / stop ─────────────────────────────────────────
-function startSensor() {
-  // NEW: never start the accelerometer while Google Fit owns the count.
-  if (googleFitConnected) {
-    setPill("still", "Synced from Google Fit");
-    return;
-  }
-
-  if (
-    typeof DeviceMotionEvent !== "undefined" &&
-    typeof DeviceMotionEvent.requestPermission === "function"
-  ) {
-    // iOS: needs one user gesture
-    function iosRequest() {
-      DeviceMotionEvent.requestPermission()
-        .then(r => {
-          if (r === "granted") {
-            window.addEventListener("devicemotion", onMotion);
-            motionListenerAttached = true;
-            setPill("still", "Standing still");
-          } else {
-            setPill("waiting", "Motion permission denied");
-          }
-        })
-        .catch(() => setPill("waiting", "Could not access sensor"));
-      document.removeEventListener("click", iosRequest);
-    }
-    setPill("waiting", "Tap anywhere to enable sensor");
-    document.addEventListener("click", iosRequest);
-
-  } else if (typeof DeviceMotionEvent !== "undefined") {
-    // Android / Chrome — starts immediately, no permission needed
-    window.addEventListener("devicemotion", onMotion);
-    motionListenerAttached = true;
-    setPill("still", "Standing still");
-
-  } else {
-    setPill("waiting", "No motion sensor on this device");
-  }
-}
-
-// NEW: cleanly detach the accelerometer listener so it can never fire
-// again while Google Fit is connected (belt-and-braces on top of the
-// googleFitConnected guard inside onMotion itself).
-function stopSensor() {
-  if (motionListenerAttached) {
-    window.removeEventListener("devicemotion", onMotion);
-    motionListenerAttached = false;
-  }
-  clearTimeout(stillTimer);
-}
-
-// ── Display update ────────────────────────────────────────────
-function updateDisplay() {
-  document.getElementById("stepCount").textContent   = steps.toLocaleString();
-  document.getElementById("goalDisplay").textContent = DAILY_GOAL.toLocaleString();
-
-  const pct = Math.min(steps / DAILY_GOAL, 1);
-  document.getElementById("progressBar").style.width  = (pct * 100).toFixed(1) + "%";
-  document.getElementById("progressText").textContent = (pct * 100).toFixed(1) + "% of daily goal";
-
-  const arcLen = 267;
-  document.getElementById("gaugeArc").setAttribute(
-    "stroke-dasharray", (pct * arcLen).toFixed(1) + " " + arcLen
-  );
-  document.getElementById("gaugeNeedle").style.transform =
-    `rotate(${(-180 + pct * 180).toFixed(1)}deg)`;
-
-  const slowS  = steps - briskSteps;
-  const slowP  = steps > 0 ? Math.round(slowS      / steps * 100) : 0;
-  const briskP = steps > 0 ? Math.round(briskSteps / steps * 100) : 0;
-  document.getElementById("slowLabel").textContent  = slowS.toLocaleString()      + " · " + slowP  + "%";
-  document.getElementById("briskLabel").textContent = briskSteps.toLocaleString() + " · " + briskP + "%";
-  document.getElementById("slowBar").style.width    = slowP  + "%";
-  document.getElementById("briskBar").style.width   = briskP + "%";
-
-  const km  = (steps * STEP_STRIDE).toFixed(2);
-  const cal = Math.round(steps * CAL_PER_STEP);
-  const min = Math.round(steps / 100);
-
-  document.getElementById("kmDisplay").textContent      = km;
-  document.getElementById("calDisplay").textContent     = cal;
-  document.getElementById("calorieDisplay").textContent = cal;
-  document.getElementById("kmStatDisplay").textContent  = km;
-  document.getElementById("minuteDisplay").textContent  = min;
-
-  document.getElementById("calFunVal").textContent = cal;
-  document.getElementById("calFunSub").textContent = "≈ " + (cal / 10).toFixed(2) + " banana chips";
-
-  const briskMins = Math.round(briskSteps / 120);
-  const whoPct    = Math.min(briskMins / WHO_GOAL, 1);
-  document.getElementById("whoRemaining").textContent     = Math.max(WHO_GOAL - briskMins, 0);
-  document.getElementById("whoPct").textContent           = Math.round(whoPct * 100) + "%";
-  document.getElementById("whoMins").textContent          = briskMins + " Min";
-  document.getElementById("briskMinsDisplay").textContent = briskMins + " Min";
-  document.getElementById("whoCircle").style.strokeDashoffset =
-    (188.5 - whoPct * 188.5).toFixed(1);
-
-  weekData[todayIdx] = steps;
-  const wTotal = weekData.reduce((a, b) => a + b, 0);
-  document.getElementById("weekSteps").textContent = wTotal.toLocaleString();
-  document.getElementById("weekKm").textContent    = (wTotal * STEP_STRIDE).toFixed(2) + " km";
-  document.getElementById("weekCal").textContent   = Math.round(wTotal * CAL_PER_STEP) + " kcal";
-
-  renderWeekChart();
-}
-
-// ── Weekly bar chart ──────────────────────────────────────────
-function renderWeekChart() {
-  const chart  = document.getElementById("weekChart");
-  const labels = document.getElementById("weekDayLabels");
-  const days   = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const maxVal = Math.max(...weekData, 1500);
-  const maxDay = Math.max(...weekData);
-
-  chart.innerHTML  = "";
-  labels.innerHTML = "";
-
-  weekData.forEach((s, i) => {
-    const h       = Math.max((s / maxVal) * 74, s > 0 ? 4 : 2);
-    const isToday = i === todayIdx;
-    const isBest  = s > 0 && s === maxDay;
-
-    const col = document.createElement("div");
-    col.className = "week-col";
-
-    const bar = document.createElement("div");
-    bar.className    = "week-bar" + (isToday ? " today" : "");
-    bar.style.height = h + "px";
-
-    if (isBest) {
-      const crown = document.createElement("span");
-      crown.className     = "week-crown";
-      crown.textContent   = "👑";
-      crown.style.display = "block";
-      bar.appendChild(crown);
+    if (prevWeekSteps > 0) {
+      const diffPct = Math.round(((weekSteps - prevWeekSteps) / prevWeekSteps) * 100);
+      if (diffPct > 5) insights.push({ icon: "ti-trending-up", text: `You walked ${diffPct}% more than last week.` });
+      else if (diffPct < -5) insights.push({ icon: "ti-trending-down", text: `You walked ${Math.abs(diffPct)}% less than last week.` });
+      else insights.push({ icon: "ti-equal", text: "Your activity is steady compared to last week." });
     }
 
-    col.appendChild(bar);
-    chart.appendChild(col);
+    const briskMin = briskMinutes(state.today.brisk);
+    const slowSteps = state.today.steps - state.today.brisk;
+    if (state.today.steps > 0 && briskMin > 0 && state.today.brisk > slowSteps) {
+      insights.push({ icon: "ti-run", text: "Most of today's activity comes from brisk walking." });
+    }
 
-    const lbl = document.createElement("span");
-    lbl.className   = "week-day-label";
-    lbl.textContent = days[i];
-    labels.appendChild(lbl);
-  });
-}
+    // best day this month
+    const monthPrefix = todayStr().slice(0, 7);
+    let bestDay = null, bestSteps = -1;
+    Object.entries(state.history).forEach(([date, rec]) => {
+      if (date.startsWith(monthPrefix) && rec.steps > bestSteps) { bestSteps = rec.steps; bestDay = date; }
+    });
+    if (bestDay === state.today.date && state.today.steps > 0) {
+      insights.push({ icon: "ti-star", text: "Today is your best day this month!" });
+    }
 
-// ══════════════════════════════════════════════════════════════
-// NEW: Google Fit integration hooks
-//
-// steps.html calls these two functions directly. Before this fix
-// neither existed, so `if (window.DHAS_setStepsFromGoogleFit)` in
-// steps.html was always false and the "sync" was a complete no-op —
-// the accelerometer never even knew Google Fit existed.
-// ══════════════════════════════════════════════════════════════
+    if (state.lifetime.highestDay > 0 && state.today.steps > 0) {
+      const gap = state.lifetime.highestDay - state.today.steps;
+      if (gap > 0 && gap <= 1500) {
+        insights.push({ icon: "ti-target-arrow", text: `You're close to your personal record — only ${gap.toLocaleString()} steps away.` });
+      } else if (state.today.steps >= state.lifetime.highestDay && state.today.steps > 0) {
+        insights.push({ icon: "ti-trophy", text: "New personal best step count today!" });
+      }
+    }
 
-// Called by steps.html with the TOTAL step count for today from the
-// Google Fit aggregate API (already summed across all points/datasets).
-window.DHAS_setStepsFromGoogleFit = function (googleSteps) {
-  googleFitConnected = true;
+    if (state.streak.current >= 3) {
+      insights.push({ icon: "ti-flame", text: `You're on a ${state.streak.current}-day streak — your consistency is paying off.` });
+    }
 
-  // Stop the accelerometer FIRST so no race can add a local step
-  // between setting `steps` below and the listener actually detaching.
-  stopSensor();
-
-  steps = Math.max(0, parseInt(googleSteps, 10) || 0);
-
-  // We don't get a brisk/slow split from the Fit aggregate call, so
-  // just make sure the previously-tracked brisk count never exceeds
-  // the new total (avoids a >100% brisk bar).
-  briskSteps = Math.min(briskSteps, steps);
-
-  save();
-  updateDisplay();
-  setPill("still", "Synced from Google Fit");
-
-  const fitStatus = document.getElementById("fitStatus");
-  if (fitStatus) {
-    fitStatus.textContent = "Connected to Google Fit";
-    fitStatus.style.display = "block";
+    if (!insights.length) {
+      insights.push({ icon: "ti-info-circle", text: "Keep logging activity to unlock personalised insights." });
+    }
+    return insights;
   }
-};
 
-// Called by steps.html when the person disconnects Google Fit.
-// Resumes local accelerometer tracking from the current total.
-window.DHAS_clearGoogleFit = function () {
-  googleFitConnected = false;
-  save();
-  setPill("still", "Standing still");
-  startSensor();
-};
+  return {
+    calories, distanceKm, activeMinutes, briskMinutes, goalPct, goalMessage,
+    activityScore, checkAchievements, ACHIEVEMENTS, getOrCreateChallenge,
+    challengeProgress, weeklyInsights
+  };
+})();
 
-// Lets steps.html check current state without duplicating the flag.
-window.DHAS_isGoogleFitConnected = function () {
-  return googleFitConnected;
-};
+/* ============================================================
+   UI — DOM rendering, cached refs, animated counters
+   ============================================================ */
+const UI = (function () {
+  const el = {};
+  ["mSteps","mCalories","mDistance","mSlow","mBrisk","mActiveMin",
+   "scoreNum","scoreArc","scoreLabel","scoreStars","scoreBreakdown",
+   "goalArc","goalPct","goalStepsTxt","goalRemaining","goalMsg",
+   "streakCurrent","streakLongest","streakTotalDays",
+   "weekChart","weekDayLabels","wkSteps","wkAvg","wkDist","wkCal","wkBest","wkTrend",
+   "lSteps","lCal","lDist","lHigh","lStreak","lDays","lMins","lGoals",
+   "achGrid","chTitle","chSub","chBar","chProgressTxt","chDoneBadge",
+   "insightsList","calMonthLbl","calDow","calGrid",
+   "sensorPill","sensorPillText","sensorDot","dateSub","permCard","permBtn",
+   "dayModalOverlay","dayModalTitle","dmSteps","dmCal","dmDist","dmBrisk","dmGoal","dayModalClose",
+   "calPrev","calNext"
+  ].forEach(id => el[id] = document.getElementById(id));
 
-// ── Init ─────────────────────────────────────────────────────
-window.onload = function () {
-  updateDisplay();
-  // NEW: only the accelerometer path checks googleFitConnected internally,
-  // so this call is safe either way — it will no-op if Fit already owns
-  // the count for today (loaded from localStorage in loadSaved() above).
-  startSensor();
-  scheduleMidnightReset();
-};
+  const _animCache = {};
+  function animateNumber(elem, key, from, to, decimals) {
+    if (!elem) return;
+    if (_animCache[key] === to) { elem.textContent = format(to, decimals); return; }
+    _animCache[key] = to;
+    const start = performance.now();
+    const dur = 450;
+    const startVal = from;
+    function step(now) {
+      const p = Math.min((now - start) / dur, 1);
+      const eased = 1 - Math.pow(1 - p, 3);
+      const val = startVal + (to - startVal) * eased;
+      elem.textContent = format(val, decimals);
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+  function format(v, decimals) {
+    if (decimals) return v.toFixed(decimals);
+    return Math.round(v).toLocaleString();
+  }
+
+  function setArc(circleEl, pct, radius) {
+    if (!circleEl) return;
+    const circumference = 2 * Math.PI * radius;
+    circleEl.setAttribute("stroke-dasharray", `${(pct * circumference).toFixed(1)} ${circumference.toFixed(1)}`);
+  }
+
+  function renderSensorState(stateName) {
+    if (!el.sensorPill) return;
+    el.sensorPill.className = "sensor-pill";
+    if (stateName === "walking") {
+      el.sensorPill.classList.add("walking");
+      el.sensorPillText.textContent = "Walking";
+      el.sensorDot.style.display = "block";
+    } else if (stateName === "still") {
+      el.sensorPill.classList.add("still");
+      el.sensorPillText.textContent = "Standing still";
+      el.sensorDot.style.display = "none";
+    } else if (stateName === "permission-needed") {
+      el.sensorPill.classList.add("waiting");
+      el.sensorPillText.textContent = "Tap to enable";
+      el.sensorDot.style.display = "none";
+      if (el.permCard) el.permCard.style.display = "block";
+    } else if (stateName === "denied") {
+      el.sensorPill.classList.add("waiting");
+      el.sensorPillText.textContent = "Permission denied";
+      el.sensorDot.style.display = "none";
+    } else if (stateName === "unsupported") {
+      el.sensorPill.classList.add("waiting");
+      el.sensorPillText.textContent = "Sensor unavailable";
+      el.sensorDot.style.display = "none";
+    } else {
+      el.sensorPill.classList.add("waiting");
+      el.sensorPillText.textContent = "Initialising…";
+      el.sensorDot.style.display = "none";
+    }
+  }
+
+  function renderToday(state) {
+    const s = state.today.steps;
+    animateNumber(el.mSteps, "steps", 0, s, 0);
+    animateNumber(el.mCalories, "cal", 0, Engine.calories(s), 0);
+    animateNumber(el.mDistance, "dist", 0, Engine.distanceKm(s), 2);
+    animateNumber(el.mSlow, "slow", 0, s - state.today.brisk, 0);
+    animateNumber(el.mBrisk, "brisk", 0, state.today.brisk, 0);
+    animateNumber(el.mActiveMin, "active", 0, Engine.activeMinutes(s), 0);
+  }
+
+  function renderScore(state) {
+    const r = Engine.activityScore(state.today, state.lifetime);
+    animateNumber(el.scoreNum, "score", 0, r.score, 0);
+    setArc(el.scoreArc, r.score / 100, 50);
+    if (el.scoreLabel) el.scoreLabel.textContent = r.label;
+    if (el.scoreStars) el.scoreStars.textContent = "★".repeat(r.stars) + "☆".repeat(5 - r.stars);
+    if (el.scoreBreakdown) el.scoreBreakdown.textContent = r.breakdown;
+  }
+
+  function renderGoal(state) {
+    const s = state.today.steps;
+    const pct = Engine.goalPct(s);
+    setArc(el.goalArc, pct, 55);
+    if (el.goalPct) el.goalPct.textContent = Math.round(pct * 100) + "%";
+    if (el.goalStepsTxt) el.goalStepsTxt.textContent = `${s.toLocaleString()} / ${DAILY_GOAL.toLocaleString()}`;
+    const remaining = Math.max(DAILY_GOAL - s, 0);
+    if (el.goalRemaining) {
+      el.goalRemaining.textContent = remaining === 0 ? "Goal reached!" : `${remaining.toLocaleString()} steps to go`;
+    }
+    if (el.goalMsg) el.goalMsg.textContent = Engine.goalMessage(s);
+  }
+
+  function renderStreak(state) {
+    const displayCurrent = state.today.steps >= STREAK_MIN_STEPS && state.streak.lastCountedDate !== state.today.date
+      ? state.streak.current + 1 : state.streak.current;
+    if (el.streakCurrent) el.streakCurrent.textContent = displayCurrent;
+    if (el.streakLongest) el.streakLongest.textContent = Math.max(state.streak.longest, displayCurrent);
+    if (el.streakTotalDays) el.streakTotalDays.textContent = state.lifetime.totalActiveDays;
+  }
+
+  function renderWeek(state) {
+    const dow = new Date().getDay();
+    const labels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+    const weekStartDate = new Date(state.week.weekStart + "T00:00:00");
+    const values = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStartDate); d.setDate(d.getDate() + i);
+      const key = todayStr(d);
+      values.push({ date: key, steps: state.week.days[key] || 0, isToday: key === state.today.date });
+    }
+    const maxVal = Math.max(...values.map(v => v.steps), 1500);
+
+    if (el.weekChart) {
+      el.weekChart.innerHTML = values.map(v => {
+        const h = Math.max((v.steps / maxVal) * 74, v.steps > 0 ? 4 : 2);
+        const cls = v.isToday ? "today" : (v.steps >= DAILY_GOAL ? "met" : "");
+        return `<div class="week-col"><div class="week-bar ${cls}" style="height:${h}px"></div></div>`;
+      }).join("");
+    }
+    if (el.weekDayLabels) {
+      el.weekDayLabels.innerHTML = labels.map(l => `<span class="week-day-label" style="flex:1;text-align:center">${l}</span>`).join("");
+    }
+
+    const totalSteps = values.reduce((a, v) => a + v.steps, 0);
+    const activeDaysCount = values.filter(v => v.steps > 0).length;
+    const avg = activeDaysCount ? Math.round(totalSteps / activeDaysCount) : 0;
+    const best = values.reduce((a, v) => v.steps > a.steps ? v : a, values[0]);
+
+    if (el.wkSteps) el.wkSteps.textContent = totalSteps.toLocaleString();
+    if (el.wkAvg) el.wkAvg.textContent = avg.toLocaleString();
+    if (el.wkDist) el.wkDist.textContent = Engine.distanceKm(totalSteps).toFixed(2) + " km";
+    if (el.wkCal) el.wkCal.textContent = Engine.calories(totalSteps).toLocaleString() + " kcal";
+    if (el.wkBest) el.wkBest.textContent = best.steps > 0 ? labels[new Date(best.date + "T00:00:00").getDay()] + ` (${best.steps.toLocaleString()})` : "—";
+
+    // trend vs previous week
+    const prevStart = new Date(weekStartDate); prevStart.setDate(prevStart.getDate() - 7);
+    let prevTotal = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(prevStart); d.setDate(d.getDate() + i);
+      const rec = state.history[todayStr(d)];
+      if (rec) prevTotal += rec.steps;
+    }
+    if (el.wkTrend) {
+      if (prevTotal === 0) {
+        el.wkTrend.textContent = "—"; el.wkTrend.className = "";
+      } else {
+        const diff = Math.round(((totalSteps - prevTotal) / prevTotal) * 100);
+        el.wkTrend.textContent = (diff >= 0 ? "+" : "") + diff + "%";
+        el.wkTrend.className = diff >= 0 ? "trend-up" : "trend-down";
+      }
+    }
+  }
+
+  function renderLifetime(state) {
+    const L = state.lifetime;
+    if (el.lSteps) el.lSteps.textContent = L.steps.toLocaleString();
+    if (el.lCal) el.lCal.textContent = Math.round(L.calories).toLocaleString();
+    if (el.lDist) el.lDist.textContent = L.distanceKm.toFixed(2) + " km";
+    if (el.lHigh) el.lHigh.textContent = L.highestDay.toLocaleString();
+    if (el.lStreak) el.lStreak.textContent = state.streak.longest;
+    if (el.lDays) el.lDays.textContent = L.totalActiveDays;
+    if (el.lMins) el.lMins.textContent = Math.round(L.totalActiveMinutes).toLocaleString();
+    if (el.lGoals) el.lGoals.textContent = L.goalsCompleted;
+  }
+
+  function renderAchievements(state) {
+    if (!el.achGrid) return;
+    el.achGrid.innerHTML = Engine.ACHIEVEMENTS.map(a => {
+      const unlocked = state.achievements.includes(a.id);
+      return `<div class="ach-badge ${unlocked ? "unlocked" : ""}" title="${a.name}">
+                <div class="ach-icon">${a.icon}</div>
+                <div class="ach-name">${a.name}</div>
+              </div>`;
+    }).join("");
+  }
+
+  function renderChallenge(state) {
+    const { ch, progress, pct, done } = Engine.challengeProgress(state);
+    if (el.chTitle) el.chTitle.innerHTML = `<i class="ti ti-target"></i> ${ch.label}`;
+    if (el.chSub) el.chSub.textContent = "Resets every week — keep it up!";
+    if (el.chBar) el.chBar.style.width = pct + "%";
+    const progDisplay = ch.type === "distance" ? progress.toFixed(2) : Math.round(progress).toLocaleString();
+    if (el.chProgressTxt) el.chProgressTxt.textContent = `${progDisplay} / ${ch.target.toLocaleString()} ${ch.unit}`;
+    if (el.chDoneBadge) el.chDoneBadge.style.display = done ? "inline-flex" : "none";
+  }
+
+  function renderInsights(state) {
+    if (!el.insightsList) return;
+    const insights = Engine.weeklyInsights(state);
+    el.insightsList.innerHTML = insights.map(i =>
+      `<div class="insight-item"><i class="ti ${i.icon}"></i><div class="insight-text">${i.text}</div></div>`
+    ).join("");
+  }
+
+  // ── Calendar ──
+  let calViewDate = new Date();
+
+  function renderCalendar(state) {
+    if (!el.calGrid) return;
+    const y = calViewDate.getFullYear(), m = calViewDate.getMonth();
+    if (el.calMonthLbl) el.calMonthLbl.textContent = calViewDate.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+
+    if (el.calDow && !el.calDow.dataset.built) {
+      el.calDow.innerHTML = ["S","M","T","W","T","F","S"].map(d => `<div class="cal-dow">${d}</div>`).join("");
+      el.calDow.dataset.built = "1";
+    }
+
+    const firstDow = new Date(y, m, 1).getDay();
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    let html = "";
+    for (let i = 0; i < firstDow; i++) html += `<div class="cal-cell empty"></div>`;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = y + "-" + String(m + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+      const rec = dateStr === state.today.date
+        ? { steps: state.today.steps, brisk: state.today.brisk, goalMet: state.today.steps >= DAILY_GOAL }
+        : state.history[dateStr];
+      let cls = "none";
+      if (rec && rec.steps > 0) {
+        cls = rec.goalMet ? "goal" : (rec.steps >= STREAK_MIN_STEPS ? "mid" : "low");
+      }
+      html += `<div class="cal-cell ${cls}" data-date="${dateStr}" title="${dateStr}">${d}</div>`;
+    }
+    el.calGrid.innerHTML = html;
+
+    el.calGrid.querySelectorAll(".cal-cell:not(.empty)").forEach(cell => {
+      cell.addEventListener("click", () => openDayModal(cell.dataset.date, state));
+    });
+  }
+
+  function openDayModal(dateStr, state) {
+    const rec = dateStr === state.today.date
+      ? { steps: state.today.steps, brisk: state.today.brisk }
+      : state.history[dateStr];
+    if (!rec) return;
+    if (el.dayModalTitle) el.dayModalTitle.textContent = new Date(dateStr + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
+    if (el.dmSteps) el.dmSteps.textContent = rec.steps.toLocaleString();
+    if (el.dmCal) el.dmCal.textContent = Engine.calories(rec.steps).toLocaleString() + " kcal";
+    if (el.dmDist) el.dmDist.textContent = Engine.distanceKm(rec.steps).toFixed(2) + " km";
+    if (el.dmBrisk) el.dmBrisk.textContent = Engine.briskMinutes(rec.brisk || 0) + " min";
+    if (el.dmGoal) el.dmGoal.textContent = Math.round(Engine.goalPct(rec.steps) * 100) + "%";
+    if (el.dayModalOverlay) el.dayModalOverlay.classList.add("show");
+  }
+
+  function initCalendarNav(getState) {
+    el.calPrev?.addEventListener("click", () => { calViewDate.setMonth(calViewDate.getMonth() - 1); renderCalendar(getState()); });
+    el.calNext?.addEventListener("click", () => { calViewDate.setMonth(calViewDate.getMonth() + 1); renderCalendar(getState()); });
+    el.dayModalClose?.addEventListener("click", () => el.dayModalOverlay?.classList.remove("show"));
+    el.dayModalOverlay?.addEventListener("click", (e) => { if (e.target === el.dayModalOverlay) el.dayModalOverlay.classList.remove("show"); });
+  }
+
+  function renderDateSub() {
+    if (el.dateSub) {
+      el.dateSub.textContent = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" });
+    }
+  }
+
+  function showToast(text, type) {
+    const t = document.getElementById("dhasToast");
+    if (!t) return;
+    t.className = type || "success";
+    t.innerHTML = `<span>${text}</span><button class="toast-dismiss" onclick="this.parentElement.style.display='none'">✕</button>`;
+    t.style.display = "flex";
+    setTimeout(() => { t.style.display = "none"; }, 4500);
+  }
+
+  function renderAll(state) {
+    renderToday(state);
+    renderScore(state);
+    renderGoal(state);
+    renderStreak(state);
+    renderWeek(state);
+    renderLifetime(state);
+    renderAchievements(state);
+    renderChallenge(state);
+    renderInsights(state);
+    renderCalendar(state);
+  }
+
+  return { renderAll, renderSensorState, renderDateSub, showToast, initCalendarNav, renderCalendar: () => {} };
+})();
+
+/* ============================================================
+   MAIN — wiring
+   ============================================================ */
+(function main() {
+  const state = Store.load();
+  UI.renderDateSub();
+  UI.renderAll(state);
+  UI.initCalendarNav(Store.get);
+
+  let saveDebounce = null;
+  function scheduleSave() {
+    clearTimeout(saveDebounce);
+    saveDebounce = setTimeout(() => Store.save(), 1500);
+  }
+
+  Sensor.onStateChange = (s) => UI.renderSensorState(s);
+
+  Sensor.onStep = (isBrisk) => {
+    Store.addSteps(1, isBrisk);
+    const st = Store.get();
+    UI.renderAll(st);
+
+    const unlocked = Engine.checkAchievements(st);
+    unlocked.forEach(a => UI.showToast(`${a.icon} Achievement unlocked: ${a.name}`, "success"));
+    if (unlocked.length) UI.renderAll(st);
+
+    scheduleSave();
+  };
+
+  const permBtn = document.getElementById("permBtn");
+  if (permBtn) {
+    permBtn.addEventListener("click", async () => {
+      const granted = await Sensor.requestIOSPermission();
+      if (granted) {
+        document.getElementById("permCard").style.display = "none";
+        UI.showToast("Step tracking enabled.", "success");
+      } else {
+        UI.showToast("Motion permission was denied.", "error");
+      }
+    });
+  }
+
+  Sensor.start();
+
+  // Midnight rollover watcher — check every 60s whether the date has changed
+  let lastCheckedDate = todayStr();
+  setInterval(() => {
+    const t = todayStr();
+    if (t !== lastCheckedDate) {
+      lastCheckedDate = t;
+      const s = Store.load(); // load() performs rollover internally
+      UI.renderAll(s);
+      UI.showToast("New day started — counters reset.", "success");
+    }
+  }, 60 * 1000);
+
+  // Persist on tab hide/close so nothing is lost between debounced saves
+  document.addEventListener("visibilitychange", () => { if (document.hidden) Store.save(); });
+  window.addEventListener("beforeunload", () => Store.save());
+})();
+
+})();
