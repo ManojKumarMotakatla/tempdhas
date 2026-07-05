@@ -255,18 +255,22 @@ function proceedGoogleAuth(googleId, name, email) {
     body: JSON.stringify({ name, email, google_id: googleId })
   })
   .then(r => r.json())
-  .then(data => {
+// doctor_login.html, inside proceedGoogleAuth()
+.then(data => {
     if (data.success) {
       localStorage.setItem("dhas_doctor_token", data.token);
       localStorage.setItem("dhas_doctor",       JSON.stringify(data.doctor));
-      sessionStorage.setItem("dhas_pw_temp", googleId);   
-      window.location.href = "doctor_dashboard.html";
+      sessionStorage.setItem("dhas_pw_temp", googleId);
+
+      DHAS_CRYPTO.initWithPassword(window.API_BASE, data.token, googleId)
+        .catch(e => console.warn("[Auth] E2E key restore failed:", e))
+        .finally(() => { window.location.href = "doctor_dashboard.html"; });
     } else {
       cancelContinue();
       document.getElementById("loginError").textContent = data.message || "Google sign-in failed.";
       document.getElementById("loginError").style.display = "block";
     }
-  })
+})
   .catch(() => { cancelContinue(); });
 }
 
