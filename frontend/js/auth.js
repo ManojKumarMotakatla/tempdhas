@@ -40,16 +40,28 @@ function handleLogin(email, password) {
     fetch(window.API_BASE + "/login", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ email, password })   // ← plain password, no SHA-256
+        body:    JSON.stringify({ email, password })
     })
     .then(res => res.json())
-    .then(data => {
+    .then(async (data) => {
         if (data.success) {
             localStorage.setItem("dhas_token", data.token);
             localStorage.setItem("dhas_user",  JSON.stringify(data.user));
-            sessionStorage.setItem("dhas_pw_temp", password);
-            window.location.href = "dashboard.html";
 
+            // Restore (or first-time create+backup) the E2E key pair using
+            // the password we just typed. This is the ONLY place the
+            // plaintext password is ever available, so it MUST happen
+            // here — otherwise every fresh browser/device silently gets
+            // a new key pair and old messages become unreadable.
+            try {
+                if (window.DHAS_CRYPTO) {
+                    await DHAS_CRYPTO.initWithPassword(window.API_BASE, data.token, password);
+                }
+            } catch (e) {
+                console.warn("[Auth] E2E key restore failed:", e);
+            }
+
+            window.location.href = "dashboard.html";
         } else if (data.notRegistered) {
             showError("No account found with this email. Please register first.");
             showRegisterLink();
