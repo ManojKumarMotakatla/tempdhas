@@ -178,17 +178,17 @@
   }
 
   // ── E2E crypto init ──────────────────────────────────────────
-
-try {
-    const _pw = sessionStorage.getItem("dhas_pw_temp");
-    DHAS_CRYPTO.initWithPassword(BASE, ME.token, _pw).catch(err => {
+(async function initE2E() {
+    try {
+      const result = await DHAS_CRYPTO.ensureReady(BASE, ME.token);
+      if (!result.ok && result.reason === "NEEDS_PASSWORD_RESTORE") {
+        toast("Your secure chat key needs restoring. Please log out and log back in.", "error");
+      }
+    } catch (err) {
       console.warn("[Chat] Crypto init failed:", err);
-    }).finally(() => {
-      sessionStorage.removeItem("dhas_pw_temp"); // don't keep plaintext pw around
-    });
-} catch (err) {
-    console.warn("[Chat] Crypto init threw synchronously:", err);
-}
+    }
+  })();
+
 
   // ── Socket setup ─────────────────────────────────────────────
   function connectSocket() {
