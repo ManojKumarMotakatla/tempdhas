@@ -225,6 +225,15 @@ const DHAS_CRYPTO = (() => {
 
   // ── Init: called once on page load ────────────────────────
   // Generates key pair if needed, then uploads public key.
+async function init(apiBase, token) {
+    try {
+      await generateAndStoreKeyPair();
+      await uploadMyPublicKey(apiBase, token);
+      console.log("[DHAS Crypto] E2E ready.");
+    } catch (err) {
+      console.warn("[DHAS Crypto] Init failed:", err.message);
+    }
+  }
 
 
   // ── Password-based wrapping (for server-side key backup) ──
