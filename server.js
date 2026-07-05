@@ -130,15 +130,16 @@ app.use((req, res, next) => {
         try {
             const contentType = res.get("Content-Type") || "";
             if (typeof body === "string" && contentType.includes("text/html")) {
-                body = body.replace(
-                    /(src|href)="(\/(?:js|css)\/[^"?]+\.(?:js|css))"/g,
-                    (match, attr, assetPath) => {
-                        const absPath = path.join(__dirname, "frontend", assetPath);
-                        const v = getAssetVersion(absPath);
-                        return `${attr}="${assetPath}?v=${v}"`;
-                    }
-                );
-            }
+    body = body.replace(
+        /(src|href)="((?:\.\/)?(?:js|css)\/[^"?]+\.(?:js|css))"/g,
+        (match, attr, assetPath) => {
+            const cleanPath = assetPath.replace(/^\.\//, "").replace(/^\//, "");
+            const absPath = path.join(__dirname, "frontend", cleanPath);
+            const v = getAssetVersion(absPath);
+            return `${attr}="${assetPath}?v=${v}"`;
+        }
+    );
+}
         } catch (e) {
             console.warn("HTML asset-version rewrite skipped:", e.message);
         }
