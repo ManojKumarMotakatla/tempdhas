@@ -170,8 +170,8 @@ const sendMessage = async (req, res) => {
     const { role } = req;
     const id = myId(req);
     const {
-        room_id, message_type, content, is_encrypted, iv,
-        file_name, file_size, file_mime, file_url, file_iv, metadata
+        room_id, message_type, content,
+        file_name, file_size, file_mime, file_url, metadata
     } = req.body;
 
     const room = await verifyRoomAccess(room_id, role, id);
@@ -216,11 +216,10 @@ const sendMessage = async (req, res) => {
                 (room_id, sender_type, sender_id, message_type, content,
                  file_name, file_size, file_mime, file_data, metadata,
                  is_encrypted, iv, file_iv, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent')`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, 'sent')`,
             [room.id, role, id, message_type, finalContent,
              file_name || null, file_size || null, file_mime || null,
-             file_url  || null, finalMetadata,
-             is_encrypted ? 1 : 0, iv || null, file_iv || null]);
+             file_url  || null, finalMetadata]);
 
         const [savedRows] = await db.promise().query(
             "SELECT * FROM chat_messages WHERE id = ?", [result.insertId]);
