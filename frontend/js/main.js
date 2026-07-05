@@ -35,7 +35,8 @@ function showToast(msg, type = "success") {
 // ── Service Worker Registration ───────────────────────────────
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js")
+    // was: navigator.serviceWorker.register("/sw.js")
+navigator.serviceWorker.register("/sw.js?v=" + (window.__BUILD_ID || Date.now()))
       .then(registration => {
         console.log("[DHAS SW] Registered:", registration.scope);
 
