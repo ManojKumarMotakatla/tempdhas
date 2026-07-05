@@ -215,120 +215,174 @@ const Store = (function () {
    Rewritten with: secure-context check, watchdog, debug counters.
    ============================================================ */
 const Sensor = (function () {
-  let onStep = null;         // callback(isBrisk)
-  let onStateChange = null;  // callback(stateName)
-  let onDebug = null;        // callback({eventCount, magnitude, lastEventAt})
+  let onStep = null;
+  let onStateChange = null;
+  let onDebug = null;
   let attached = false;
+  let usingGenericSensor = false;
+  let genericSensor = null;
 
-  let filteredMag = 0, previousFilteredMag = 0;
-  let lastPeak = 0, goingUp = true;
-  let lastStepTime = 0, pendingSteps = 0, walkConfirmed = false;
-  let stableMovementCount = 0, previousSwing = 0, consistentSwingCount = 0;
+  // ── Gravity isolation ──
+  // Gravity is the slow-moving component of acceleration; we track it
+  // with a slow low-pass filter, then subtract it from the raw reading
+  // to get "linear acceleration" — the part actually caused by movement,
+  // independent of how the phone is oriented/held.
+  let gravity = { x: 0, y: 0, z: 9.81 };
+  const GRAVITY_ALPHA = 0.9;
+
+  // Smoothed magnitude of linear acceleration
+  let smoothedMag = 0;
+  const SMOOTH_ALPHA = 0.25;
+
+  // ── Peak/valley step state machine ──
+  let lastMag = 0;
+  let rising = false;
+  let waitingForValley = false;
+  let peakVal = 0;
+  let valleyVal = 0;
+  let lastStepTime = 0;
+
+  const STEP_THRESHOLD    = 1.15;  // min peak-to-valley swing (m/s^2) to count as a real step
+  const MIN_STEP_INTERVAL = 300;   // ms - fastest plausible footfall
+  const MAX_STEP_INTERVAL = 2000;  // ms - gap this long resets the walking session
+
+  let eventCount = 0, lastEventAt = 0, watchdogTimer = null;
   let stillTimer = null;
 
-  // NEW: diagnostics
-  let eventCount = 0;
-  let lastEventAt = 0;
-  let watchdogTimer = null;
-
   function isSecureEnough() {
-    // Matches the browser's own rule: devicemotion/Accelerometer only
-    // fire on HTTPS, or on http://localhost / http://127.0.0.1 on the
-    // SAME device. A phone hitting your dev machine's LAN IP over
-    // plain http (e.g. http://192.168.1.20:3007) is NOT secure and
-    // will get zero events, with no visible error.
     if (window.isSecureContext) return true;
     const h = location.hostname;
     return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
   }
 
-  function markWalking() {
-    onStateChange && onStateChange("walking");
-    clearTimeout(stillTimer);
-    stillTimer = setTimeout(() => {
-      walkConfirmed = false;
-      pendingSteps = 0;
-      onStateChange && onStateChange("still");
-    }, 2500);
-  }
-
   function clearWatchdog() { if (watchdogTimer) clearTimeout(watchdogTimer); }
-
   function armWatchdog() {
     clearWatchdog();
     watchdogTimer = setTimeout(() => {
-      if (eventCount === 0) {
-        // Attached but truly nothing has arrived — tell the user plainly.
-        onStateChange && onStateChange("no-data");
-      }
+      if (eventCount === 0) onStateChange && onStateChange("no-data");
     }, WATCHDOG_MS);
   }
 
-  function handleMotion(e) {
+  function scheduleStillCheck() {
+    clearTimeout(stillTimer);
+    stillTimer = setTimeout(() => onStateChange && onStateChange("still"), 2000);
+  }
+
+  // Core sample processor — fed by either the Generic Sensor API or devicemotion
+  function processSample(ax, ay, az) {
     eventCount++;
     lastEventAt = Date.now();
 
+    // Update gravity estimate (slow-moving average)
+    gravity.x = GRAVITY_ALPHA * gravity.x + (1 - GRAVITY_ALPHA) * ax;
+    gravity.y = GRAVITY_ALPHA * gravity.y + (1 - GRAVITY_ALPHA) * ay;
+    gravity.z = GRAVITY_ALPHA * gravity.z + (1 - GRAVITY_ALPHA) * az;
+
+    // Linear acceleration = raw minus gravity
+    const lx = ax - gravity.x;
+    const ly = ay - gravity.y;
+    const lz = az - gravity.z;
+    const linMag = Math.sqrt(lx * lx + ly * ly + lz * lz);
+
+    // Light smoothing to cut sensor noise
+    smoothedMag = SMOOTH_ALPHA * linMag + (1 - SMOOTH_ALPHA) * smoothedMag;
+
+    onDebug && onDebug({ eventCount, magnitude: smoothedMag, lastEventAt });
+    detectStep(smoothedMag);
+  }
+
+  function detectStep(mag) {
+    const now = Date.now();
+
+    if (mag > lastMag) {
+      if (!rising) { rising = true; valleyVal = lastMag; }
+      if (mag > peakVal) peakVal = mag;
+    } else if (mag < lastMag) {
+      if (rising) { rising = false; waitingForValley = true; }
+      if (waitingForValley && mag < valleyVal) valleyVal = mag;
+
+      if (waitingForValley) {
+        const swing = peakVal - valleyVal;
+        if (swing >= STEP_THRESHOLD) {
+          const interval = lastStepTime === 0 ? MIN_STEP_INTERVAL + 1 : now - lastStepTime;
+          if (interval >= MIN_STEP_INTERVAL && interval <= MAX_STEP_INTERVAL) {
+            lastStepTime = now;
+            waitingForValley = false;
+            peakVal = mag; valleyVal = mag;
+            const brisk = interval < 500;
+            onStateChange && onStateChange("walking");
+            onStep && onStep(brisk);
+            scheduleStillCheck();
+          } else if (interval > MAX_STEP_INTERVAL) {
+            // Long gap — treat this as the start of a fresh cycle, don't count it
+            lastStepTime = now;
+            waitingForValley = false;
+            peakVal = mag; valleyVal = mag;
+          }
+          // interval < MIN_STEP_INTERVAL → likely a double-bounce of the same
+          // footfall; ignore it but keep tracking (don't reset waitingForValley)
+        }
+      }
+    }
+    lastMag = mag;
+  }
+
+  function handleMotion(e) {
     const a = e.accelerationIncludingGravity && e.accelerationIncludingGravity.x != null
       ? e.accelerationIncludingGravity
-      : e.acceleration; // fallback for devices/browsers that only expose linear acceleration
+      : e.acceleration;
+    if (!a || a.x == null || a.y == null || a.z == null) return;
+    processSample(a.x, a.y, a.z);
+  }
 
-    if (!a || a.x == null) {
-      onDebug && onDebug({ eventCount, magnitude: null, lastEventAt });
-      return;
-    }
-
-    const raw = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-    filteredMag = LOW_PASS_ALPHA * raw + (1 - LOW_PASS_ALPHA) * filteredMag;
-    onDebug && onDebug({ eventCount, magnitude: filteredMag, lastEventAt });
-
-    const suddenJump = Math.abs(filteredMag - previousFilteredMag);
-    previousFilteredMag = filteredMag;
-    if (suddenJump > 6) return;
-
-    if (filteredMag > lastPeak) { lastPeak = filteredMag; goingUp = true; }
-
-    if (goingUp && filteredMag < lastPeak - 0.5) {
-      goingUp = false;
-      const valley = filteredMag;
-      const swing = lastPeak - valley;
-      const swingDiff = Math.abs(swing - previousSwing);
-      consistentSwingCount = swingDiff < 3 ? consistentSwingCount + 1 : 0;
-      previousSwing = swing;
-
-      if (swing >= MIN_SWING) {
-        const now = Date.now();
-        const interval = now - lastStepTime;
-        if (interval < 300) { lastPeak = filteredMag; return; }
-
-        if (lastStepTime > 0 && interval >= MIN_STEP_MS && interval <= MAX_STEP_MS) {
-          stableMovementCount++;
-          pendingSteps++;
-          if (pendingSteps >= CONFIRM_STEPS && stableMovementCount >= 4 && consistentSwingCount >= 2) {
-            walkConfirmed = true;
-          }
-          if (walkConfirmed) {
-            const brisk = interval >= 400 && interval <= 650 && swing > 4;
-            markWalking();
-            onStep && onStep(brisk);
-          }
-        } else if (lastStepTime > 0) {
-          pendingSteps = 0;
-          stableMovementCount = 0;
-          walkConfirmed = false;
-        }
-        lastStepTime = now;
+  // Prefer the Generic Sensor API (Accelerometer) when available — higher
+  // sample rate and cleaner data than devicemotion, but Chrome-on-Android
+  // only, and needs the 'accelerometer' permission.
+  async function tryGenericSensor() {
+    if (typeof Accelerometer === "undefined") return false;
+    try {
+      if (navigator.permissions) {
+        try {
+          const status = await navigator.permissions.query({ name: "accelerometer" });
+          if (status.state === "denied") return false;
+        } catch (_) { /* some browsers don't support querying this permission name */ }
       }
-      lastPeak = filteredMag;
+      genericSensor = new Accelerometer({ frequency: 30 });
+      genericSensor.addEventListener("reading", () => {
+        processSample(genericSensor.x, genericSensor.y, genericSensor.z);
+      });
+      genericSensor.addEventListener("error", (err) => {
+        console.warn("[Steps] Generic Sensor error, falling back to devicemotion:", err.error && err.error.message);
+        usingGenericSensor = false;
+        startDeviceMotionFallback();
+      });
+      genericSensor.start();
+      usingGenericSensor = true;
+      return true;
+    } catch (err) {
+      console.warn("[Steps] Generic Sensor unavailable:", err.message);
+      return false;
     }
   }
 
-  function start() {
+  function startDeviceMotionFallback() {
     if (attached) return;
+    window.addEventListener("devicemotion", handleMotion);
+    attached = true;
+  }
 
-    if (!isSecureEnough()) {
-      onStateChange && onStateChange("insecure-context");
+  async function start() {
+    if (attached || usingGenericSensor) return;
+
+    if (!isSecureEnough()) { onStateChange && onStateChange("insecure-context"); return; }
+
+    const gotGeneric = await tryGenericSensor();
+    if (gotGeneric) {
+      onStateChange && onStateChange("still");
+      armWatchdog();
       return;
     }
+
     if (typeof DeviceMotionEvent === "undefined") {
       onStateChange && onStateChange("unsupported");
       return;
@@ -337,8 +391,7 @@ const Sensor = (function () {
       onStateChange && onStateChange("permission-needed");
       return; // caller must invoke requestIOSPermission() from a user gesture
     }
-    window.addEventListener("devicemotion", handleMotion);
-    attached = true;
+    startDeviceMotionFallback();
     onStateChange && onStateChange("still");
     armWatchdog();
   }
@@ -346,29 +399,27 @@ const Sensor = (function () {
   function requestIOSPermission() {
     return DeviceMotionEvent.requestPermission().then(result => {
       if (result === "granted") {
-        window.addEventListener("devicemotion", handleMotion);
-        attached = true;
+        startDeviceMotionFallback();
         onStateChange && onStateChange("still");
         armWatchdog();
         return true;
       }
       onStateChange && onStateChange("denied");
       return false;
-    }).catch(() => {
-      onStateChange && onStateChange("denied");
-      return false;
-    });
+    }).catch(() => { onStateChange && onStateChange("denied"); return false; });
   }
 
   function stop() {
     if (attached) window.removeEventListener("devicemotion", handleMotion);
+    if (genericSensor) { try { genericSensor.stop(); } catch (_) {} }
     attached = false;
+    usingGenericSensor = false;
     clearTimeout(stillTimer);
     clearWatchdog();
   }
 
   function getDebugSnapshot() {
-    return { eventCount, lastEventAt, secure: isSecureEnough(), attached };
+    return { eventCount, lastEventAt, secure: isSecureEnough(), attached: attached || usingGenericSensor };
   }
 
   return {
