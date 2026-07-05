@@ -225,15 +225,7 @@ const DHAS_CRYPTO = (() => {
 
   // ── Init: called once on page load ────────────────────────
   // Generates key pair if needed, then uploads public key.
-  async function init(apiBase, token) {
-    try {
-      await generateAndStoreKeyPair();
-      await uploadMyPublicKey(apiBase, token);
-      console.log("[DHAS Crypto] E2E ready.");
-    } catch (err) {
-      console.warn("[DHAS Crypto] Init failed:", err.message);
-    }
-  }
+
 
   // ── Password-based wrapping (for server-side key backup) ──
 async function deriveWrappingKey(password, saltB64) {
@@ -297,8 +289,9 @@ async function ensureReady(apiBase, token) {
   await uploadMyPublicKey(apiBase, token);
   return { ok: true, reason: "NEW_KEYPAIR" };
 }
+// crypto.js
 async function initWithPassword(apiBase, token, password) {
-  if (!password) { await init(apiBase, token); return; } // Google users fallback
+  if (!password) { await init(apiBase, token); return; }
 
   try {
     const res  = await fetch(apiBase + "/keys/backup", {
@@ -307,10 +300,19 @@ async function initWithPassword(apiBase, token, password) {
     const data = await res.json();
 
     if (data.success && data.backup && data.backup.encrypted_private_key) {
-      const { key } = await deriveWrappingKey(password, data.backup.key_salt);
-      const privJwk  = await unwrapPrivateKeyJwk(data.backup.encrypted_private_key, data.backup.key_iv, key);
-      const pubJwk   = JSON.parse(data.backup.public_key_jwk);
-      localStorage.setItem(LS_KEY_PAIR, JSON.stringify({ publicKeyJwk: pubJwk, privateKeyJwk: privJwk }));
+      try {
+        const { key } = await deriveWrappingKey(password, data.backup.key_salt);
+        const privJwk  = await unwrapPrivateKeyJwk(data.backup.encrypted_private_key, data.backup.key_iv, key);
+        const pubJwk   = JSON.parse(data.backup.public_key_jwk);
+        localStorage.setItem(LS_KEY_PAIR, JSON.stringify({ publicKeyJwk: pubJwk, privateKeyJwk: privJwk }));
+      } catch (unwrapErr) {
+        // A backup exists but couldn't be opened — do NOT fall back to
+        // generating a new key pair here. That would overwrite the public
+        // key on the server and permanently break decryption for every
+        // other device/conversation using the real key.
+        console.error("[DHAS Crypto] Backup exists but could not be unwrapped:", unwrapErr.message);
+        throw new Error("NEEDS_PASSWORD_RESTORE");
+      }
     } else {
       const stored = await generateAndStoreKeyPair();
       const { key, saltB64 } = await deriveWrappingKey(password);
@@ -329,11 +331,11 @@ async function initWithPassword(apiBase, token, password) {
     await uploadMyPublicKey(apiBase, token);
     console.log("[DHAS Crypto] E2E ready (restored/backed up).");
   } catch (err) {
+    if (err.message === "NEEDS_PASSWORD_RESTORE") throw err; // don't swallow — surface it
     console.warn("[DHAS Crypto] initWithPassword failed, falling back:", err.message);
     await init(apiBase, token);
   }
 }
-
   return {
     init,
     getOrDeriveRoomKey,
