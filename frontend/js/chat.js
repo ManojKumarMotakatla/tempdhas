@@ -1124,6 +1124,7 @@
   let recordingTimer   = null;
   let recordingSeconds = 0;
   let isRecording      = false;
+  let recordingStartedAt = 0;
   let _micPermState    = "unknown"; // "unknown"|"granted"|"prompt"|"denied"
 
   const elVoiceBtn     = document.getElementById("voiceBtn");
