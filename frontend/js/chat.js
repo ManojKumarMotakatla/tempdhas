@@ -177,19 +177,6 @@
     return then.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
   }
 
-  // ── E2E crypto init ──────────────────────────────────────────
-(async function initE2E() {
-    try {
-      const result = await DHAS_CRYPTO.ensureReady(BASE, ME.token);
-      if (!result.ok && result.reason === "NEEDS_PASSWORD_RESTORE") {
-        toast("Your secure chat key needs restoring. Please log out and log back in.", "error");
-      }
-    } catch (err) {
-      console.warn("[Chat] Crypto init failed:", err);
-    }
-  })();
-
-
   // ── Socket setup ─────────────────────────────────────────────
   function connectSocket() {
     if (typeof io === "undefined") {
@@ -244,7 +231,6 @@
           return;
         }
         renderMessageNow(msg, true);
-        decryptOneMessage(msg.id);
 
         if (msg.sender_type !== ME.role) {
           emitSafe("mark_read", { room_id: activeRoomId });
@@ -301,7 +287,6 @@
       if (String(room_id) === String(activeRoomId)) {
         if (elTerminatedBanner) elTerminatedBanner.style.display = "flex";
         if (elComposerWrap) elComposerWrap.style.display = "none";
-        DHAS_CRYPTO.clearRoomKeyCache(room_id);
       }
       loadContacts(true);
     });
@@ -531,9 +516,6 @@
 
     if (elMessages) elMessages.innerHTML = `<div class="loading-msgs">Loading conversation…</div>`;
 
-    // Pre-fetch E2E key in background
-    DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, roomId).catch(() => {});
-
     // Join socket room
     emitSafe("join_room", { room_id: roomId }, (ack) => {
       if (!ack || !ack.success) {
@@ -568,13 +550,10 @@
       renderedMsgIds.clear();
 
       const msgs = data.data || [];
-      // Render all history messages synchronously first
+      // Render all history messages synchronously
       for (const msg of msgs) {
         renderMessageNow(msg, false);
       }
-
-      // Then decrypt encrypted ones in background
-      decryptVisibleMessages();
 
       scrollToBottom();
       emitSafe("mark_read", { room_id: roomId });
@@ -655,23 +634,25 @@
     return `<span class="tick" data-mid="${m.id}" style="display:inline-flex;align-items:center;gap:3px;">${tick}<span class="status-label" style="font-size:.65rem;">${label}</span></span>`;
   }
 
-  // Builds bubble HTML synchronously. Encrypted text shows a placeholder.
+  // Builds bubble HTML synchronously. Content is always plain (no E2E).
   function buildBubbleBodySync(m) {
     if (m.message_type === "text") {
-      if (m.is_encrypted && m.iv && m.content) {
-        // Placeholder — will be replaced by decryptOneMessage() / decryptVisibleMessages()
-        return `<div class="bubble-text encrypted-placeholder" data-ct="${escapeAttr(m.content)}" data-iv="${escapeAttr(m.iv)}" data-room="${m.room_id}">🔒 Decrypting…</div>`;
+      // Backward compatibility: a small number of old rows may still have
+      // is_encrypted=1 from before E2E was removed. We can no longer
+      // decrypt those (the client-side crypto module is gone), so show a
+      // clear notice instead of raw ciphertext.
+      if (m.is_encrypted) {
+        return `<div class="bubble-text encrypted-placeholder">🔒 This is an old encrypted message and can no longer be displayed.</div>`;
       }
       return `<div class="bubble-text">${escapeHTML(m.content || "")}</div>`;
 
     } else if (m.message_type === "image") {
-      if (m.is_encrypted && m.file_iv) {
-        return `<div class="bubble-file" id="enc-img-${m.id}" style="cursor:pointer"
-                  onclick="DHAS_CHAT.decryptAndShowImage(${m.id},'${escapeAttr(m.file_data)}','${escapeAttr(m.file_iv)}',${m.room_id})">
-                  <i class="ti ti-lock" style="font-size:24px;color:var(--blue)"></i>
+      if (m.is_encrypted) {
+        return `<div class="bubble-file">
+                  <i class="ti ti-lock" style="font-size:24px;color:var(--muted)"></i>
                   <div>
                     <div class="bf-name">${escapeHTML(m.file_name || "Image")}</div>
-                    <div class="bf-size">Tap to decrypt &amp; view</div>
+                    <div class="bf-size">Old encrypted file — no longer viewable</div>
                   </div>
                 </div>`;
       }
@@ -681,13 +662,12 @@
               ${m.content ? `<div class="bubble-caption">${escapeHTML(m.content)}</div>` : ""}`;
 
     } else if (m.message_type === "pdf") {
-      if (m.is_encrypted && m.file_iv) {
-        return `<div class="bubble-file" style="cursor:pointer"
-                  onclick="DHAS_CHAT.decryptAndDownloadFile(${m.id},'${escapeAttr(m.file_data)}','${escapeAttr(m.file_iv)}',${m.room_id},'${escapeAttr(m.file_name || "document.pdf")}')">
-                  <i class="ti ti-lock" style="font-size:24px;color:var(--rose)"></i>
+      if (m.is_encrypted) {
+        return `<div class="bubble-file">
+                  <i class="ti ti-lock" style="font-size:24px;color:var(--muted)"></i>
                   <div>
                     <div class="bf-name">${escapeHTML(m.file_name || "Document")}</div>
-                    <div class="bf-size">Tap to decrypt &amp; download</div>
+                    <div class="bf-size">Old encrypted file — no longer viewable</div>
                   </div>
                 </div>`;
       }
@@ -728,81 +708,6 @@
 
     } else {
       return `<div class="bubble-text">Unsupported message type</div>`;
-    }
-  }
-
-  // ── FIX (v2): decrypt a single placeholder by message id ───────
-  async function decryptOneMessage(msgId) {
-    if (!elMessages) return;
-    const row = elMessages.querySelector(`[data-msg-id="${msgId}"]`);
-    if (!row) return;
-    const el = row.querySelector(".encrypted-placeholder");
-    if (!el) return; // not an encrypted text message — nothing to do
-
-    const ct     = el.dataset.ct;
-    const iv     = el.dataset.iv;
-    const roomId = el.dataset.room || activeRoomId;
-    if (!ct || !iv || !roomId) return;
-
-    let key = null;
-    try {
-      key = await DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, roomId);
-    } catch (e) {
-      console.warn("[Chat] Could not get room key for decryption:", e);
-    }
-
-    if (key) {
-      try {
-        const pt = await DHAS_CRYPTO.decryptMessage(ct, iv, key);
-        el.textContent = pt !== null ? pt : "⚠️ Could not decrypt message";
-      } catch {
-        el.textContent = "⚠️ Decryption error";
-      }
-    } else {
-      el.textContent = "🔒 Encrypted (key unavailable)";
-    }
-    el.classList.remove("encrypted-placeholder");
-    delete el.dataset.ct;
-    delete el.dataset.iv;
-    delete el.dataset.room;
-  }
-
-  // Decrypt all encrypted text placeholders in the visible message list
-  // (used for the initial bulk history load in openRoom())
-  async function decryptVisibleMessages() {
-    if (!elMessages) return;
-    const placeholders = elMessages.querySelectorAll(".encrypted-placeholder");
-    if (!placeholders.length) return;
-
-    const roomId = activeRoomId;
-    if (!roomId) return;
-
-    let key = null;
-    try {
-      key = await DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, roomId);
-    } catch (e) {
-      console.warn("[Chat] Could not get room key for decryption:", e);
-    }
-
-    for (const el of placeholders) {
-      const ct     = el.dataset.ct;
-      const iv     = el.dataset.iv;
-      if (!ct || !iv) continue;
-
-      if (key) {
-        try {
-          const pt = await DHAS_CRYPTO.decryptMessage(ct, iv, key);
-          el.textContent = pt !== null ? pt : "⚠️ Could not decrypt message";
-        } catch {
-          el.textContent = "⚠️ Decryption error";
-        }
-      } else {
-        el.textContent = "🔒 Encrypted (key unavailable)";
-      }
-      el.classList.remove("encrypted-placeholder");
-      delete el.dataset.ct;
-      delete el.dataset.iv;
-      delete el.dataset.room;
     }
   }
 
@@ -870,29 +775,6 @@
     if (!text || !activeRoomId) return;
     if (elInput) elInput.value = "";
     emitSafe("stop_typing");
-
-    let key = null;
-    try {
-      key = await DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, activeRoomId);
-    } catch { key = null; }
-
-    if (key) {
-      try {
-        const { ciphertext, iv } = await DHAS_CRYPTO.encryptMessage(text, key);
-        emitSafe("send_message", {
-          room_id:      activeRoomId,
-          message_type: "text",
-          content:      ciphertext,
-          is_encrypted: true,
-          iv
-        }, (ack) => {
-          if (!ack || !ack.success) toast((ack && ack.message) || "Failed to send.", "error");
-        });
-        return;
-      } catch (err) {
-        console.warn("[Chat] Encryption failed, sending plaintext:", err);
-      }
-    }
 
     emitSafe("send_message", {
       room_id:      activeRoomId,
@@ -962,27 +844,12 @@
       if (!allowed.includes(file.type)) { toast("Only PDF, JPG, PNG and WEBP files are supported.", "error"); return; }
       if (file.size > 8 * 1024 * 1024) { toast("File is too large. Maximum 8 MB.", "error"); return; }
 
-      toast("Encrypting & uploading…", "success");
+      toast("Uploading…", "success");
 
       try {
-        const arrayBuffer = await file.arrayBuffer();
-        let key = null;
-        try { key = await DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, activeRoomId); } catch { key = null; }
-
-        let uploadBuffer = arrayBuffer;
-        let fileIv = null;
-
-        if (key) {
-          const { encryptedBuffer, iv } = await DHAS_CRYPTO.encryptFile(arrayBuffer, key);
-          uploadBuffer = encryptedBuffer;
-          fileIv = iv;
-        }
-
-        const blob = new Blob([uploadBuffer], { type: "application/octet-stream" });
         const form = new FormData();
         form.append("room_id", String(activeRoomId));
-        form.append("file", blob, file.name);
-        if (fileIv) form.append("file_iv", fileIv);
+        form.append("file", file, file.name);
 
         const res  = await fetch(`${BASE}/chat/upload?room_id=${encodeURIComponent(activeRoomId)}`, {
           method: "POST", headers: authHeadersNoJSON(), body: form
@@ -997,9 +864,7 @@
           file_name:    data.file.file_name,
           file_size:    data.file.file_size,
           file_mime:    data.file.file_mime,
-          file_url:     data.file.file_url,
-          is_encrypted: !!fileIv,
-          file_iv:      data.file.file_iv || fileIv
+          file_url:     data.file.file_url
         }, (ack) => {
           if (!ack || !ack.success) toast((ack && ack.message) || "Failed to send file.", "error");
         });
@@ -1009,52 +874,6 @@
         toast("Upload failed — check your connection.", "error");
       }
     });
-  }
-
-  // ── Decrypt & display encrypted image ─────────────────────────
-  async function decryptAndShowImage(msgId, fileUrl, ivB64, roomId) {
-    try {
-      const res = await fetch(`${BASE}${fileUrl}`, { headers: authHeadersNoJSON() });
-      const buf = await res.arrayBuffer();
-      const key = await DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, roomId);
-      if (!key) { toast("Cannot decrypt: key unavailable.", "error"); return; }
-
-      const decrypted = await DHAS_CRYPTO.decryptFile(buf, ivB64, key);
-      if (!decrypted) { toast("Decryption failed.", "error"); return; }
-
-      const blob = new Blob([decrypted]);
-      const url  = URL.createObjectURL(blob);
-      const el   = document.getElementById(`enc-img-${msgId}`);
-      if (el) {
-        el.outerHTML = `<a href="${url}" target="_blank"><img class="bubble-image" src="${url}" alt="Image"></a>`;
-      }
-    } catch (e) {
-      toast("Could not load image.", "error");
-    }
-  }
-
-  // ── Decrypt & download encrypted file ─────────────────────────
-  async function decryptAndDownloadFile(msgId, fileUrl, ivB64, roomId, fileName) {
-    try {
-      toast("Decrypting…", "success");
-      const res = await fetch(`${BASE}${fileUrl}`, { headers: authHeadersNoJSON() });
-      const buf = await res.arrayBuffer();
-      const key = await DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, roomId);
-      if (!key) { toast("Cannot decrypt: key unavailable.", "error"); return; }
-
-      const decrypted = await DHAS_CRYPTO.decryptFile(buf, ivB64, key);
-      if (!decrypted) { toast("Decryption failed.", "error"); return; }
-
-      const blob = new Blob([decrypted]);
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href     = url;
-      a.download = fileName;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-    } catch (e) {
-      toast("Could not download file.", "error");
-    }
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -1564,34 +1383,12 @@
     if (blob.size < 500) { toast("Recording too short. Try again.", "error"); return; }
     if (blob.size > 16 * 1024 * 1024) { toast("Voice message too long (max ~15 min).", "error"); return; }
 
-    // Encrypt the audio blob if we have a room key.
-    // IMPORTANT: keep the original audio extension even on the encrypted blob —
-    // sending it as application/octet-stream causes the server's file-type
-    // validation to reject the upload.
-    let uploadBlob  = blob;
-    let fileIv      = null;
-
-    try {
-      const key = await DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, activeRoomId);
-      if (key) {
-        const ab = await blob.arrayBuffer();
-        const { encryptedBuffer, iv } = await DHAS_CRYPTO.encryptFile(ab, key);
-        // Use the real audio MIME so the server accepts the file, then the
-        // file_iv field signals to the receiver that it needs decryption.
-        uploadBlob = new Blob([encryptedBuffer], { type: actualMime });
-        fileIv = iv;
-      }
-    } catch (e) {
-      console.warn("[Chat] Voice encrypt failed, uploading plaintext:", e);
-    }
-
     toast("Sending voice message…", "success");
 
     try {
       const form = new FormData();
       form.append("room_id", String(activeRoomId));
-      form.append("file", uploadBlob, `voice_${Date.now()}.${ext}`);
-      if (fileIv) form.append("file_iv", fileIv);
+      form.append("file", blob, `voice_${Date.now()}.${ext}`);
 
       const res  = await fetch(`${BASE}/chat/upload?room_id=${encodeURIComponent(activeRoomId)}`, {
         method: "POST", headers: authHeadersNoJSON(), body: form
@@ -1607,9 +1404,7 @@
         file_size:    data.file.file_size,
         file_mime:    actualMime,
         file_url:     data.file.file_url,
-        content:      formatRecordTime(durSecs),   // store duration as content
-        is_encrypted: !!fileIv,
-        file_iv:      data.file.file_iv || fileIv
+        content:      formatRecordTime(durSecs)   // store duration as content
       }, (ack) => {
         if (!ack || !ack.success) toast((ack && ack.message) || "Failed to send voice message.", "error");
       });
@@ -1656,20 +1451,18 @@ function buildVoiceBubble(m) {
     const dur   = m.content || "0:00";   // total duration, stored at record time
     const seed  = m.id || Math.random();
     const bars  = generateWaveBars(seed, 28);
-    const isEnc = m.is_encrypted && m.file_iv;
     const audioId = `voice-audio-${m.id}`;
 
-    if (isEnc) {
-      return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
-        <button class="vb-play-btn" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})" title="Tap to decrypt &amp; play">
-          <i class="ti ti-player-play-filled"></i>
-        </button>
-        <div class="vb-waveform" style="cursor:pointer" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})">
-          <div class="vb-progress" style="width:0%"></div>
-          <div class="vb-bars">${bars}</div>
-        </div>
-        <span class="vb-dur" id="vbd-${m.id}">${escapeHTML(dur)}</span>
-      </div>`;
+    if (m.is_encrypted) {
+      // Backward compatibility with old encrypted rows — can no longer
+      // be decrypted since the client-side crypto module was removed.
+      return `<div class="bubble-file">
+                <i class="ti ti-lock" style="font-size:24px;color:var(--muted)"></i>
+                <div>
+                  <div class="bf-name">${escapeHTML(m.file_name || "Voice message")}</div>
+                  <div class="bf-size">Old encrypted file — no longer playable</div>
+                </div>
+              </div>`;
     }
 
     const fileUrl = m.file_data || m.file_url || "";
@@ -1766,60 +1559,6 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
     audio.currentTime = pct * audio.duration;
   }
 
-  // Decrypt and play an encrypted voice message inline
-  async function decryptAndPlayVoice(msgId, fileUrl, ivB64, roomId) {
-    const bubbleEl = document.getElementById(`vb-${msgId}`);
-    const playBtn  = bubbleEl?.querySelector(".vb-play-btn");
-    if (playBtn) {
-      playBtn.innerHTML = '<i class="ti ti-loader-2" style="animation:spin .7s linear infinite;font-size:13px"></i>';
-      playBtn.disabled  = true;
-    }
-
-    try {
-      const fullUrl = fileUrl.startsWith("http") ? fileUrl : BASE + fileUrl;
-      const res  = await fetch(fullUrl, { headers: authHeadersNoJSON() });
-      const buf  = await res.arrayBuffer();
-      const key  = await DHAS_CRYPTO.getOrDeriveRoomKey(BASE, ME.token, roomId);
-      if (!key) { toast("Cannot decrypt voice message.", "error"); return; }
-
-      const dec  = await DHAS_CRYPTO.decryptFile(buf, ivB64, key);
-      if (!dec)  { toast("Voice decryption failed.", "error"); return; }
-
-      const blob    = new Blob([dec], { type: "audio/webm" });
-      const blobUrl = URL.createObjectURL(blob);
-      const audioId = `voice-audio-${msgId}`;
-
-      // Replace the locked bubble with a live audio player
-      if (bubbleEl) {
-        const dur = bubbleEl.querySelector(".vb-dur")?.textContent || "0:00";
-        const seed = msgId;
-        const bars = generateWaveBars(seed, 28);
-        bubbleEl.innerHTML = `
-          <audio id="${audioId}" src="${blobUrl}" preload="auto" style="display:none" data-orig-dur="${escapeAttr(dur)}"></audio>
-          <button class="vb-play-btn" onclick="DHAS_CHAT.toggleVoicePlay('${audioId}','vb-${msgId}',this)" title="Play">
-            <i class="ti ti-player-play-filled"></i>
-          </button>
-          <div class="vb-waveform" onclick="DHAS_CHAT.seekVoice(event,'${audioId}','vb-${msgId}')">
-            <div class="vb-progress" style="width:0%"></div>
-            <div class="vb-bars">${bars}</div>
-          </div>
-          <span class="vb-dur" id="vbd-${msgId}">${escapeHTML(dur)}</span>`;
-
-        // Auto-play after decrypt
-        const audioEl = document.getElementById(audioId);
-        const btn     = bubbleEl.querySelector(".vb-play-btn");
-        if (audioEl && btn) toggleVoicePlay(audioId, `vb-${msgId}`, btn);
-      }
-    } catch (e) {
-      console.error("[Chat] Voice decrypt failed:", e);
-      toast("Failed to play voice message.", "error");
-      if (playBtn) {
-        playBtn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
-        playBtn.disabled  = false;
-      }
-    }
-  }
-
   // Expose to global DHAS_CHAT
   // (merged into window.DHAS_CHAT below)
   async function openByPartner(partnerId, _retried) {
@@ -1888,9 +1627,6 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
     },
     openSharedReport,
     closeModal,
-    decryptAndShowImage,
-    decryptAndDownloadFile,
-    decryptAndPlayVoice,
     toggleVoicePlay,
     seekVoice
   };
@@ -1910,20 +1646,18 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
     const dur   = m.content || "0:00";
     const seed  = m.id || Math.random();
     const bars  = generateWaveBars(seed, 28);
-    const isEnc = m.is_encrypted && m.file_iv;
     const audioId = `voice-audio-${m.id}`;
 
-    if (isEnc) {
-      return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
-        <button class="vb-play-btn" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})" title="Tap to decrypt &amp; play">
-          <i class="ti ti-player-play-filled"></i>
-        </button>
-        <div class="vb-waveform" style="cursor:pointer;position:relative;" onclick="DHAS_CHAT.decryptAndPlayVoice(${m.id},'${escapeAttr(m.file_data || m.file_url)}','${escapeAttr(m.file_iv)}',${m.room_id})">
-          <div class="vb-thumb" style="left:0%"></div>
-          <div class="vb-bars">${bars}</div>
-        </div>
-        <span class="vb-dur" id="vbd-${m.id}">${escapeHTML(dur)}</span>
-      </div>`;
+    if (m.is_encrypted) {
+      // Backward compatibility with old encrypted rows — can no longer
+      // be decrypted since the client-side crypto module was removed.
+      return `<div class="bubble-file">
+                <i class="ti ti-lock" style="font-size:24px;color:var(--muted)"></i>
+                <div>
+                  <div class="bf-name">${escapeHTML(m.file_name || "Voice message")}</div>
+                  <div class="bf-size">Old encrypted file — no longer playable</div>
+                </div>
+              </div>`;
     }
 
     const fileUrl = m.file_data || m.file_url || "";
