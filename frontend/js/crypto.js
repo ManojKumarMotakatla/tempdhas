@@ -266,6 +266,37 @@ async function unwrapPrivateKeyJwk(wrappedB64, ivB64, wrappingKey) {
 // ── Called at LOGIN (needs the plaintext password briefly) ──
 // Restores the same key pair on any device, or creates + backs up
 // a new one if this is the first login ever.
+
+  async function hasServerBackup(apiBase, token) {
+  try {
+    const res  = await fetch(apiBase + "/keys/backup", { headers: { Authorization: "Bearer " + token } });
+    const data = await res.json();
+    return !!(data.success && data.backup && data.backup.encrypted_private_key);
+  } catch {
+    return false;
+  }
+}
+
+// Called on chat page load instead of init(). Never blindly generates a
+// new key pair if a server-side backup already exists — doing so would
+// silently orphan every previously-encrypted message. If localStorage is
+// empty but a backup exists, the caller must be told to re-login (that's
+// the only place the password — and thus the ability to decrypt the
+// backup — is available).
+async function ensureReady(apiBase, token) {
+  const existing = loadStoredKeyPair();
+  if (existing) {
+    await uploadMyPublicKey(apiBase, token).catch(() => {});
+    return { ok: true };
+  }
+  const backedUp = await hasServerBackup(apiBase, token);
+  if (backedUp) {
+    return { ok: false, reason: "NEEDS_PASSWORD_RESTORE" };
+  }
+  await generateAndStoreKeyPair();
+  await uploadMyPublicKey(apiBase, token);
+  return { ok: true, reason: "NEW_KEYPAIR" };
+}
 async function initWithPassword(apiBase, token, password) {
   if (!password) { await init(apiBase, token); return; } // Google users fallback
 
