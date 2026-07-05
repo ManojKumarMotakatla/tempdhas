@@ -116,6 +116,7 @@ function handleLogout() {
 }
 
 // ── GOOGLE AUTH ──────────────────────────────────────────────────
+// auth.js
 async function handleGoogleAuth(name, email, googleId) {
     try {
         const res  = await fetch(window.API_BASE + "/auth/google", {
@@ -129,9 +130,14 @@ async function handleGoogleAuth(name, email, googleId) {
             localStorage.setItem("dhas_token", data.token);
             localStorage.setItem("dhas_user",  JSON.stringify(data.user));
             try {
-                if (window.DHAS_CRYPTO) await DHAS_CRYPTO.init(window.API_BASE, data.token);
+                if (window.DHAS_CRYPTO) {
+                    // Use the stable Google account id in place of a password so
+                    // every device restores the SAME E2E key pair from the backup
+                    // instead of generating a new one and breaking decryption.
+                    await DHAS_CRYPTO.initWithPassword(window.API_BASE, data.token, googleId);
+                }
             } catch (e) {
-                console.warn("[Auth] E2E init failed:", e);
+                console.warn("[Auth] E2E key restore failed:", e);
             }
             window.location.href = "dashboard.html";
         } else {
