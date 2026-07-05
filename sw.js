@@ -1,19 +1,35 @@
 /**
- * DHAS — sw.js  (v10 — dashboard pages now network-first, no more stale dashboards)
+ * DHAS — sw.js  (v15 — auto-versioned cache name + network-first HTML navigation)
  * Place at project ROOT (same level as server.js)
  *
- * CHANGE FROM v9:
- *   Added /dashboard.html and /doctor_dashboard.html to CHAT_DEV_PREFIXES
- *   (renamed DEV_RELOAD_PREFIXES to be more accurate). These pages were
- *   being served cache-first, so editing them required a hard refresh.
- *   Now they go through networkFirst() — same as chat.html — so a normal
- *   reload always fetches the latest version from the server when online.
- *
- *   CACHE_VERSION bumped (v11 -> v12) to evict stale cached copies of
- *   dashboard.html and doctor_dashboard.html immediately on next load.
+ * CHANGE FROM v14:
+ *   - CACHE_VERSION is no longer a hand-bumped string. It now reads a
+ *     "?v=<build-id>" query param off the Service Worker's own script
+ *     URL (set by main.js when it calls navigator.serviceWorker.register()).
+ *     The build id comes from /build-id.js on the server, which is
+ *     derived from Render's git commit SHA — so it changes automatically
+ *     on every deploy with zero manual edits.
+ *   - Added a dedicated "navigate" handler in the fetch listener so
+ *     every full-page HTML navigation always goes network-first,
+ *     regardless of DEV_RELOAD_PREFIXES. This is what was causing
+ *     mobile Chrome to keep showing an old cached page even after
+ *     the server had the new one — the SW was answering navigation
+ *     requests out of its cache-first fallback path.
  */
 
-const CACHE_VERSION = "dhas-v14";
+// ── Derive this SW instance's own registration URL to read ?v= off it.
+// self.location is the URL the SW script was fetched from, e.g.
+// "/sw.js?v=abc1234567" once main.js registers with that query param.
+const _swUrlVersion = (() => {
+  try {
+    const params = new URLSearchParams(self.location.search);
+    return params.get("v");
+  } catch {
+    return null;
+  }
+})();
+
+const CACHE_VERSION = _swUrlVersion ? `dhas-${_swUrlVersion}` : "dhas-v15";
 const API_CACHE     = "dhas-api-v8";
 const FONT_CACHE    = "dhas-fonts-v8";
 const CDN_CACHE     = "dhas-cdn-v8";
@@ -107,7 +123,7 @@ self.addEventListener("install", event => {
         )
       );
       const ok = results.filter(r => r.status === "fulfilled").length;
-      console.log(`[SW v10] Cached ${ok}/${CORE_ASSETS.length} assets`);
+      console.log(`[SW ${CACHE_VERSION}] Cached ${ok}/${CORE_ASSETS.length} assets`);
     }).then(() => self.skipWaiting())
   );
 });
@@ -147,6 +163,16 @@ self.addEventListener("fetch", event => {
     return;
   }
 
+  // NEW: Full-page HTML navigations ALWAYS go network-first, no matter
+  // what. This is the fix for mobile Chrome showing stale pages after
+  // deploy — previously only a hardcoded list of "dev reload" files got
+  // this treatment, and every other HTML page (including ones freshly
+  // deployed) could be answered straight out of the SW's own cache.
+  if (request.mode === "navigate") {
+    event.respondWith(networkFirst(request, CACHE_VERSION));
+    return;
+  }
+
   // Dev/dashboard files — network-first so edits show on normal reload
   if (isDevReloadFile(url.pathname)) {
     event.respondWith(networkFirst(request, CACHE_VERSION));
@@ -159,7 +185,10 @@ self.addEventListener("fetch", event => {
     return;
   }
 
-  // Everything else (HTML, CSS, JS) — cache first
+  // Everything else (CSS, JS, images) — cache first.
+  // Note: JS/CSS URLs now carry an automatic "?v=<hash>" query string
+  // (added server-side in server.js), so a changed file is a NEW request
+  // URL and is never served from a stale cache entry under the old URL.
   event.respondWith(cacheFirst(request, CACHE_VERSION));
 });
 
@@ -225,6 +254,7 @@ async function staleWhileRevalidate(request, cacheName) {
 
 /* ══════════════════════════════════════════════════════════════════════════
    DHAS ALARM ENGINE — runs inside the Service Worker
+   (UNCHANGED FROM v14 — no caching-related edits below this line)
    ══════════════════════════════════════════════════════════════════════════ */
 
 let _swReminders = [];
