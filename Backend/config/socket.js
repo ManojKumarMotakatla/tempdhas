@@ -130,41 +130,32 @@ function partnerSocketsInRoom(roomId, partner) {
 
 function safeParseJSON(v) { try { return JSON.parse(v); } catch { return v; } }
 
-/* Builds the column values for a chat_messages insert. For
-   "text"/"image"/"pdf" we now trust the client's is_encrypted flag:
-   when true, content/file_data are opaque ciphertext (base64) and
-   we store them verbatim plus the iv/file_iv nonces. We still cap
-   length to stop abuse, just looser than the old "must be readable
-   prose" check since base64 ciphertext is naturally longer than the
-   plaintext it represents. */
+/* Builds the column values for a chat_messages insert.
+   E2E encryption has been removed: content / file_data are always
+   stored and relayed as plain readable data. The is_encrypted / iv /
+   file_iv columns are kept in the schema for backward compatibility
+   with old rows, but every new message is written as is_encrypted=0. */
 async function buildMessageRow(role, partyId, payload) {
-    const isEncrypted = !!payload.is_encrypted;
-
     switch (payload.message_type) {
         case "text": {
             const text = (payload.content || "").trim();
             if (!text) return { error: "Message cannot be empty." };
-            // Ciphertext (base64) runs longer than plaintext for the same
-            // message, so the cap is generous; this just stops abuse.
-            const maxLen = isEncrypted ? 8000 : 4000;
-            if (text.length > maxLen) return { error: "Message is too long." };
-            if (isEncrypted && !payload.iv) return { error: "Missing encryption nonce." };
-            return { content: text, is_encrypted: isEncrypted ? 1 : 0, iv: payload.iv || null };
+            if (text.length > 4000) return { error: "Message is too long." };
+            return { content: text, is_encrypted: 0, iv: null };
         }
 
         case "image":
         case "pdf":
         case "voice": {
             if (!payload.file_url || !payload.file_name) return { error: "File information missing." };
-            if (isEncrypted && !payload.file_iv) return { error: "Missing file encryption nonce." };
             return {
                 content:      payload.content ? String(payload.content).trim().slice(0, 500) : null,
                 file_name:    payload.file_name,
                 file_size:    payload.file_size || null,
                 file_mime:    payload.file_mime || null,
-                file_data:    payload.file_url, // authenticated download URL; bytes behind it are ciphertext
-                is_encrypted: isEncrypted ? 1 : 0,
-                file_iv:      payload.file_iv || null
+                file_data:    payload.file_url,
+                is_encrypted: 0,
+                file_iv:      null
             };
         }
 
