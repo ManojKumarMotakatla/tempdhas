@@ -1,839 +1,395 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <link rel="shortcut icon" href="favicon.svg">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Step Counter - DHAS</title>
-  <script src="theme.js"></script>
-  <link rel="stylesheet" href="css/style.css">
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Fraunces:ital,wght@0,600;0,700&display=swap" rel="stylesheet">
-  <style>
-    :root{--navy:#0b1437;--navy-mid:#112057;--blue:#2a6cf6;--teal:#00c9b1}
-    body{font-family:'DM Sans',sans-serif}
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="shortcut icon" href="favicon.svg">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Activity Tracker - DHAS</title>
+<script src="theme.js"></script>
+<link rel="stylesheet" href="css/style.css">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Fraunces:ital,wght@0,600;0,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+<style>
+:root{
+  --navy:#0b1437;--navy-mid:#112057;--blue:#2a6cf6;--blue-lt:#4f8ef9;--teal:#00c9b1;
+  --amber:#f4a035;--rose:#f25c7d;--green:#22d07a;--purple:#8250ff;
+  --bg:#f4f6fc;--surface:#ffffff;--border:#e4e9f4;--text:#0d1b3e;--muted:#6b7fa3;
+  --radius:18px;--radius-sm:10px;
+  --shadow:0 2px 20px rgba(42,108,246,.09);--shadow-md:0 8px 32px rgba(42,108,246,.14);
+}
+html.dark body, body.dark{
+  --bg:#080f28;--surface:#111c3c;--border:#1e2e58;--text:#e8efff;--muted:#7d93c3;
+  --shadow:0 2px 20px rgba(0,0,0,.4);--shadow-md:0 8px 32px rgba(0,0,0,.5);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;transition:background .35s,color .35s}
+.page-wrap{max-width:600px;margin:0 auto;padding:20px 16px 60px}
 
-    .page-wrap{max-width:520px;margin:0 auto;padding:20px 16px 50px}
+/* ── Header ── */
+.page-header{
+  background:linear-gradient(135deg,#112057 0%,#2a6cf6 50%,#00c9b1 100%);
+  border-radius:20px;padding:26px 22px 22px;margin-bottom:18px;position:relative;overflow:hidden;
+}
+.page-header::before{content:'';position:absolute;top:-30px;right:-30px;width:140px;height:140px;background:rgba(255,255,255,.08);border-radius:50%}
+.ph-top{display:flex;align-items:center;justify-content:space-between;gap:10px;position:relative;z-index:1}
+.ph-title{font-family:'Fraunces',serif;color:#fff;font-size:1.5rem;font-weight:700}
+.ph-sub{color:rgba(255,255,255,.7);font-size:.82rem;margin-top:3px}
+.sensor-pill{
+  display:inline-flex;align-items:center;gap:6px;padding:5px 12px 5px 9px;border-radius:20px;
+  font-size:.72rem;font-weight:700;border:1px solid transparent;flex-shrink:0;white-space:nowrap;
+}
+.sensor-pill.walking{background:rgba(34,208,122,.2);color:#baf3d3;border-color:rgba(34,208,122,.4)}
+.sensor-pill.still{background:rgba(244,160,53,.2);color:#ffd9a3;border-color:rgba(244,160,53,.4)}
+.sensor-pill.waiting{background:rgba(255,255,255,.15);color:rgba(255,255,255,.8);border-color:rgba(255,255,255,.25)}
+.sensor-dot{width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulse 1.1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
 
-    .page-header{
-     background:linear-gradient(135deg,#112057 0%,#2a6cf6 50%,#00c9b1 100%);
-      border-radius:20px;padding:28px 20px 24px;margin-bottom:20px;
-      position:relative;overflow:hidden;text-align:center;
-    }
-    .page-header::before{content:'';position:absolute;top:-30px;right:-30px;width:130px;height:130px;background:rgba(255,255,255,0.07);border-radius:50%}
-    .page-header::after{content:'';position:absolute;bottom:-20px;left:40px;width:90px;height:90px;background:rgba(255,255,255,0.05);border-radius:50%}
+/* ── Cards ── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);margin-bottom:14px;transition:background .35s,border-color .35s}
+.card-title{font-family:'Fraunces',serif;font-weight:700;font-size:.98rem;display:flex;align-items:center;gap:8px;margin-bottom:14px;color:var(--text)}
+.card-title i{font-size:17px;color:var(--blue)}
 
-    .header-icon-wrap{
-      width:60px;height:60px;border-radius:18px;
-      background:rgba(255,255,255,0.15);
-      border:1.5px solid rgba(255,255,255,0.25);
-      display:flex;align-items:center;justify-content:center;
-      margin:0 auto 14px;position:relative;
-    }
-    .header-icon-wrap svg{width:30px;height:30px;stroke:#fff;fill:none;stroke-width:1.8}
-    .page-title{font-family:'Fraunces',serif;color:#fff;font-size:1.75rem;font-weight:700;margin-bottom:6px;position:relative}
-    .page-subtitle{color:rgba(255,255,255,0.72);font-size:0.85rem;font-weight:500;position:relative}
+/* ── Score Hero ── */
+.score-hero{display:flex;align-items:center;gap:18px}
+.score-ring-wrap{position:relative;flex-shrink:0;width:118px;height:118px}
+.score-ring-wrap svg{transform:rotate(-90deg)}
+.score-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.score-num{font-family:'Fraunces',serif;font-size:2rem;font-weight:700;color:var(--text);line-height:1}
+.score-max{font-size:.65rem;color:var(--muted)}
+.score-info{flex:1;min-width:0}
+.score-label{font-family:'Fraunces',serif;font-size:1.1rem;font-weight:700;margin-bottom:4px}
+.score-stars{margin-bottom:6px;font-size:.95rem;letter-spacing:2px}
+.score-breakdown{font-size:.74rem;color:var(--muted);line-height:1.6}
 
-    .dhas-card{background:var(--card-bg,#fff);border-radius:18px;padding:20px;box-shadow:0 2px 20px rgba(42,108,246,.09);border:1px solid var(--border,#e4e9f4);margin-bottom:14px;transition:background .35s,border-color .35s}
-    html.dark .dhas-card{background:#111c3c;border-color:#1e2e58}
-    .dhas-card h5{font-family:'Fraunces',serif;font-size:1rem;font-weight:600;margin-bottom:14px;color:var(--text,#0d1b3e);display:flex;align-items:center;gap:8px}
-    .dhas-card h5 svg{width:18px;height:18px;stroke:var(--blue,#2a6cf6);fill:none;stroke-width:2}
-    html.dark .dhas-card h5{color:#e8efff}
+/* ── Metric grid ── */
+.metric-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.metric-card{background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:14px;transition:background .3s}
+.metric-icon{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;font-size:16px}
+.metric-val{font-family:'Fraunces',serif;font-size:1.35rem;font-weight:700;color:var(--text)}
+.metric-lbl{font-size:.72rem;color:var(--muted);margin-top:2px}
 
-    .gauge-wrap{display:flex;flex-direction:column;align-items:center;margin-bottom:8px}
-    .gauge-svg{overflow:visible}
+/* ── Goal ring ── */
+.goal-row{display:flex;align-items:center;gap:18px}
+.goal-ring-wrap{position:relative;flex-shrink:0;width:130px;height:130px}
+.goal-ring-wrap svg{transform:rotate(-90deg)}
+.goal-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.goal-pct{font-family:'Fraunces',serif;font-size:1.7rem;font-weight:700;color:var(--blue)}
+.goal-steps{font-size:.72rem;color:var(--muted)}
+.goal-info{flex:1}
+.goal-remaining{font-size:.92rem;font-weight:700;color:var(--text);margin-bottom:6px}
+.goal-msg{font-size:.85rem;color:var(--green);font-weight:600;background:rgba(34,208,122,.1);padding:8px 12px;border-radius:10px;display:inline-block}
 
-    .live-pill{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;padding:4px 14px;border-radius:20px;margin-bottom:14px;border:1px solid transparent;transition:all .4s}
-    .live-pill.waiting{background:#f5f5f5;color:#888;border-color:#ddd}
-    .live-pill.walking{background:#e8f5e9;color:#2e7d32;border-color:#a5d6a7}
-    .live-pill.still{background:#fff8e1;color:#f57f17;border-color:#ffe082}
-    .dot-pulse{width:7px;height:7px;border-radius:50%;background:#4caf50;animation:pulse 1s infinite;flex-shrink:0}
-    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+/* ── Streak ── */
+.streak-row{display:flex;gap:12px;text-align:center}
+.streak-box{flex:1;background:var(--bg);border-radius:12px;padding:14px 8px}
+.streak-flame{font-size:1.6rem}
+.streak-num{font-family:'Fraunces',serif;font-size:1.5rem;font-weight:700;color:var(--text)}
+.streak-lbl{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
 
-    .walk-type-row{display:flex;justify-content:space-between;font-size:.75rem;color:#888;margin:12px 0 4px}
-    .walk-bar-bg{height:6px;border-radius:3px;background:#eee;position:relative;overflow:hidden;margin-bottom:4px}
-    .walk-bar-slow{position:absolute;left:0;top:0;height:100%;background:#ffb3a0;border-radius:3px;transition:width .4s}
-    .walk-bar-brisk{position:absolute;right:0;top:0;height:100%;background:var(--primary,#e55);border-radius:3px 0 0 3px;transition:width .4s}
+/* ── Weekly chart ── */
+.week-chart{display:flex;align-items:flex-end;gap:6px;height:90px;margin:6px 0 6px}
+.week-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
+.week-bar{width:100%;border-radius:5px 5px 0 0;background:var(--border);min-height:3px;position:relative;transition:height .4s}
+.week-bar.today{background:linear-gradient(180deg,var(--blue),var(--teal))}
+.week-bar.met{background:linear-gradient(180deg,var(--green),#16c268)}
+.week-day-label{font-size:.68rem;color:var(--muted)}
+.week-stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px;font-size:.78rem}
+.week-stat{background:var(--bg);border-radius:10px;padding:8px 10px}
+.week-stat b{color:var(--text);font-family:'Fraunces',serif;font-size:.95rem;display:block}
+.trend-up{color:var(--green)} .trend-down{color:var(--rose)}
 
-    .cal-fun-card{display:flex;justify-content:space-between;align-items:center;background:#fff3e0;border:1px solid #ffcc80;border-radius:12px;padding:14px 18px;margin-top:12px}
-    html.dark .cal-fun-card{background:rgba(255,193,7,.08);border-color:rgba(255,193,7,.2)}
-    .cal-fun-card .val{font-size:1.6rem;font-weight:700;color:#bf360c}
-    .cal-fun-card .sub{font-size:.75rem;color:#a0522d;margin-top:2px}
+/* ── Lifetime ── */
+.lifetime-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.life-item{display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:12px;padding:10px 12px}
+.life-icon{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px}
+.life-val{font-family:'Fraunces',serif;font-weight:700;font-size:.92rem;color:var(--text)}
+.life-lbl{font-size:.65rem;color:var(--muted)}
 
-    .who-row{display:flex;align-items:center;gap:18px;margin-top:10px}
-    .who-ring-wrap{position:relative;flex-shrink:0}
-    .who-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;line-height:1.3}
-    .who-center .pct{font-size:1rem;font-weight:700}
-    .who-center .mins{font-size:.7rem;color:#888}
-    .who-breakdown .item{display:flex;justify-content:space-between;font-size:.8rem;padding:4px 0;border-bottom:1px solid #f0f0f0}
-    .who-breakdown .item:last-child{border:none}
-    .dot-icon{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px}
+/* ── Achievements ── */
+.ach-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.ach-badge{background:var(--bg);border:1.5px solid var(--border);border-radius:14px;padding:12px 6px;text-align:center;opacity:.4;transition:all .3s}
+.ach-badge.unlocked{opacity:1;border-color:var(--amber);background:linear-gradient(135deg,rgba(244,160,53,.12),rgba(255,255,255,0));animation:achPop .4s ease}
+@keyframes achPop{from{transform:scale(.85)}to{transform:scale(1)}}
+.ach-icon{font-size:1.6rem;margin-bottom:4px}
+.ach-name{font-size:.62rem;font-weight:600;color:var(--text);line-height:1.3}
 
-    .week-chart{display:flex;align-items:flex-end;gap:5px;height:80px;margin:10px 0 4px}
-    .week-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px}
-    .week-bar{width:100%;border-radius:4px 4px 0 0;background:#ffd54f;min-height:3px;position:relative;transition:height .4s}
-    .week-bar.today{background:var(--primary,#e55)}
-    .week-crown{position:absolute;top:-14px;left:50%;transform:translateX(-50%);font-size:9px;display:none}
-    .week-day-label{font-size:9px;color:#aaa}
+/* ── Challenge ── */
+.challenge-box{background:linear-gradient(135deg,var(--navy-mid),var(--navy));border-radius:14px;padding:16px;color:#fff}
+.challenge-title{font-family:'Fraunces',serif;font-weight:700;font-size:1rem;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.challenge-sub{font-size:.78rem;color:rgba(255,255,255,.55);margin-bottom:12px}
+.challenge-bar-track{height:8px;background:rgba(255,255,255,.15);border-radius:99px;overflow:hidden;margin-bottom:6px}
+.challenge-bar-fill{height:100%;background:linear-gradient(90deg,var(--teal),var(--green));border-radius:99px;transition:width .5s}
+.challenge-progress-txt{font-size:.75rem;color:rgba(255,255,255,.7)}
+.challenge-done-badge{background:var(--green);color:#052e16;font-weight:700;font-size:.72rem;padding:3px 10px;border-radius:20px;display:inline-flex;align-items:center;gap:5px;margin-top:8px}
 
-    .steps-big{font-size:2.8rem;font-weight:700;margin:4px 0 2px}
-    .steps-sub{font-size:.8rem;color:#888;margin-bottom:6px}
+/* ── Insights ── */
+.insight-item{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)}
+.insight-item:last-child{border-bottom:none}
+.insight-item i{font-size:16px;color:var(--blue);margin-top:2px;flex-shrink:0}
+.insight-text{font-size:.85rem;color:var(--text);line-height:1.5}
 
-    .steps-goal{color:var(--text-muted,#6b7fa3);font-size:.9rem;margin-top:6px}
-    .steps-progress{height:8px;background:var(--border,#e4e9f4);border-radius:99px;margin:16px 0;overflow:hidden}
-    .steps-bar{height:100%;background:linear-gradient(90deg,#2a6cf6,#00c9b1);border-radius:99px;transition:width .4s}
-    .text-center{text-align:center}
-    .text-muted{color:var(--text-muted,#6b7fa3)}
+/* ── Calendar ── */
+.cal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.cal-nav-btn{background:var(--bg);border:1px solid var(--border);border-radius:8px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted)}
+.cal-nav-btn:hover{color:var(--blue);border-color:var(--blue)}
+.cal-month-lbl{font-weight:700;font-size:.88rem;font-family:'Fraunces',serif}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.cal-dow{font-size:.62rem;color:var(--muted);text-align:center;font-weight:700}
+.cal-cell{aspect-ratio:1;border-radius:6px;cursor:pointer;transition:transform .15s;display:flex;align-items:center;justify-content:center;font-size:.6rem;color:transparent}
+.cal-cell:hover{transform:scale(1.15)}
+.cal-cell.empty{visibility:hidden;cursor:default}
+.cal-cell.none{background:var(--border)}
+.cal-cell.low{background:rgba(242,92,125,.5)}
+.cal-cell.mid{background:rgba(244,160,53,.65)}
+.cal-cell.goal{background:linear-gradient(135deg,var(--green),#16c268)}
+.cal-legend{display:flex;gap:12px;margin-top:10px;font-size:.68rem;color:var(--muted);flex-wrap:wrap}
+.cal-legend span{display:inline-flex;align-items:center;gap:4px}
+.cal-legend .sw{width:9px;height:9px;border-radius:3px;display:inline-block}
 
-    /* ── Google Fit status card ── */
-    .connect-card{background:var(--card-bg,#fff);border-radius:18px;padding:20px;border:1px solid var(--border,#e4e9f4);margin-bottom:14px;box-shadow:0 2px 20px rgba(42,108,246,.09)}
-    html.dark .connect-card{background:#111c3c;border-color:#1e2e58}
-    .connect-card h4{font-family:'Fraunces',serif;font-size:1rem;font-weight:600;margin-bottom:10px;color:var(--text,#0d1b3e);display:flex;align-items:center;gap:8px}
-    .connect-card h4 svg{width:18px;height:18px;stroke:var(--blue,#2a6cf6);fill:none;stroke-width:2}
-    html.dark .connect-card h4{color:#e8efff}
-    .connect-card p{font-size:.87rem;color:var(--text-muted,#6b7fa3);line-height:1.6;margin-bottom:0}
+/* ── Day detail modal ── */
+.day-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:999;padding:20px}
+.day-modal-overlay.show{display:flex}
+.day-modal{background:var(--surface);border-radius:18px;padding:22px;max-width:340px;width:100%;box-shadow:var(--shadow-md)}
+.day-modal h3{font-family:'Fraunces',serif;margin-bottom:14px;font-size:1.05rem}
+.day-modal-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:.85rem}
+.day-modal-row:last-child{border-bottom:none}
+.day-modal-close{margin-top:14px;width:100%;padding:10px;border:none;border-radius:10px;background:var(--blue);color:#fff;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif}
 
-    .info-box{background:#fff8e1;border:1px solid #ffe082;border-radius:10px;padding:12px;margin-top:12px;font-size:.82rem;color:#795548;line-height:1.6}
-    html.dark .info-box{background:rgba(255,224,130,.08);border-color:rgba(255,224,130,.2);color:#d4a017}
+/* ── Permission prompt ── */
+.perm-card{background:var(--bg);border:1.5px dashed var(--border);border-radius:14px;padding:16px;text-align:center;font-size:.85rem;color:var(--muted);margin-bottom:14px}
+.perm-btn{margin-top:10px;padding:10px 20px;border:none;border-radius:10px;background:linear-gradient(135deg,var(--blue),var(--blue-lt));color:#fff;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif}
 
-    .dhas-btn{display:inline-block;padding:11px 20px;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.9rem;cursor:pointer;background:linear-gradient(135deg,#2a6cf6,#4f8ef9);color:#fff;transition:all .2s;margin-top:12px}
-    .dhas-btn:hover{transform:translateY(-1px)}
-
-    /* Connected / reconnect status rows */
-    .fit-status-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-    .fit-status-left{display:flex;align-items:center;gap:12px;min-width:0}
-    .fit-status-icon{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-    .fit-status-icon.ok{background:#e8f5e9}
-    html.dark .fit-status-icon.ok{background:rgba(46,125,50,.18)}
-    .fit-status-icon.warn{background:#fff8e1}
-    html.dark .fit-status-icon.warn{background:rgba(245,127,23,.18)}
-    .fit-status-title{font-weight:700;font-size:.9rem;line-height:1.3}
-    .fit-status-title.ok{color:#2e7d32}
-    html.dark .fit-status-title.ok{color:#6ee7b7}
-    .fit-status-title.warn{color:#f57f17}
-    html.dark .fit-status-title.warn{color:#fbbf24}
-    .fit-status-sub{font-size:.75rem;color:var(--text-muted,#6b7fa3);margin-top:2px}
-    .fit-actions{display:flex;gap:8px;flex-wrap:wrap;flex-shrink:0}
-    .fit-disconnect-btn{
-      background:none;border:1.5px solid #f25c7d;color:#f25c7d;
-      padding:8px 16px;border-radius:9px;font-family:'DM Sans',sans-serif;
-      font-weight:700;font-size:.8rem;cursor:pointer;transition:all .18s;white-space:nowrap;
-    }
-    .fit-disconnect-btn:hover{background:#fee2e2;}
-    html.dark .fit-disconnect-btn:hover{background:rgba(242,92,125,.15)}
-    .fit-reconnect-btn{
-      background:linear-gradient(135deg,#2a6cf6,#4f8ef9);color:#fff;border:none;
-      padding:9px 16px;border-radius:9px;font-family:'DM Sans',sans-serif;
-      font-weight:700;font-size:.8rem;cursor:pointer;transition:all .18s;white-space:nowrap;
-    }
-    .fit-reconnect-btn:hover{opacity:.9}
-    .spinner-sm{width:18px;height:18px;border-radius:50%;border:2.5px solid var(--border,#e4e9f4);border-top-color:var(--blue,#2a6cf6);animation:fitspin .7s linear infinite;flex-shrink:0}
-    @keyframes fitspin{to{transform:rotate(360deg)}}
-
-    /* ── In-page toast ── */
-    #dhasToast {
-      position: fixed;
-      bottom: 24px;
-      left: 20px;
-      z-index: 99999;
-      max-width: 340px;
-      min-width: 240px;
-      padding: 13px 18px;
-      border-radius: 14px;
-      font-size: 0.87rem;
-      font-weight: 600;
-      line-height: 1.5;
-      display: none;
-      align-items: flex-start;
-      gap: 10px;
-      box-shadow: 0 6px 28px rgba(0,0,0,0.18);
-      font-family: 'DM Sans', sans-serif;
-    }
-    #dhasToast.success { background: #d1fae5; border: 1.5px solid #86efac; color: #166534; }
-    #dhasToast.error   { background: #fee2e2; border: 1.5px solid #fca5a5; color: #991b1b; }
-    html.dark #dhasToast.success, body.dark #dhasToast.success { background: #052e16; border-color: #166534; color: #86efac; }
-    html.dark #dhasToast.error,   body.dark #dhasToast.error   { background: #450a0a; border-color: #991b1b; color: #fca5a5; }
-    .toast-dismiss { margin-left: auto; background: none; border: none; cursor: pointer; color: inherit; opacity: 0.6; font-size: 14px; padding: 0 0 0 8px; }
-    .toast-dismiss:hover { opacity: 1; }
-  </style>
+.text-muted{color:var(--muted)}
+#dhasToast{position:fixed;bottom:24px;left:20px;z-index:99999;max-width:340px;min-width:240px;padding:13px 18px;border-radius:14px;font-size:.87rem;font-weight:600;display:none;align-items:flex-start;gap:10px;box-shadow:0 6px 28px rgba(0,0,0,.18)}
+#dhasToast.success{background:#d1fae5;border:1.5px solid #86efac;color:#166534}
+#dhasToast.error{background:#fee2e2;border:1.5px solid #fca5a5;color:#991b1b}
+html.dark #dhasToast.success{background:#052e16;border-color:#166534;color:#86efac}
+html.dark #dhasToast.error{background:#450a0a;border-color:#991b1b;color:#fca5a5}
+.toast-dismiss{margin-left:auto;background:none;border:none;cursor:pointer;color:inherit;opacity:.6}
+</style>
 </head>
 <body>
 
-  <nav class="dhas-navbar">
-    <div class="brand" style="font-family:'Fraunces',serif;font-weight:700;font-size:1.2rem;color:#fff;display:flex;align-items:center;gap:8px">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
-      DHAS
-    </div>
-    <a href="dashboard.html" style="color:#fff;font-size:0.85rem;text-decoration:none;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.18);padding:6px 16px;border-radius:20px;display:flex;align-items:center;gap:6px">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 19l-7-7 7-7"/></svg>
-      Dashboard
-    </a>
-  </nav>
+<nav class="dhas-navbar">
+  <div class="brand" style="font-family:'Fraunces',serif;font-weight:700;font-size:1.2rem;color:#fff;display:flex;align-items:center;gap:8px">
+    <i class="ti ti-heart" style="font-size:22px;color:#fff"></i> DHAS
+  </div>
+  <a href="dashboard.html" style="color:#fff;font-size:.85rem;text-decoration:none;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);padding:6px 16px;border-radius:20px;display:flex;align-items:center;gap:6px">
+    <i class="ti ti-chevron-left" style="font-size:14px"></i> Dashboard
+  </a>
+</nav>
 
-  <div class="page-wrap">
+<div class="page-wrap">
 
-    <!-- ── Hero Header ── -->
-    <div class="page-header">
-      <div class="header-icon-wrap">
-        <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
-      </div>
-      <div class="page-title">Step Counter</div>
-      <div class="page-subtitle">Track your daily steps and stay active</div>
-    </div>
-
-    <!-- Google Fit status card (content swapped by JS based on connection state) -->
-    <div class="connect-card" id="fitConnectCard">
-      <div id="fitCardContent">
-        <div style="text-align:center;padding:6px 0;color:var(--text-muted,#6b7fa3);font-size:.85rem;display:flex;align-items:center;justify-content:center;gap:10px;">
-          <div class="spinner-sm"></div> Checking Google Fit connection…
-        </div>
-      </div>
-    </div>
-
-    <!-- Main counter card -->
-    <div class="dhas-card text-center">
-
-      <div id="livePill" class="live-pill waiting">
-        <span class="dot-pulse" id="dotPulse" style="display:none"></span>
-        <span id="pillText">Initialising sensor…</span>
-      </div>
-
-      <div class="gauge-wrap">
-        <svg class="gauge-svg" width="210" height="115" viewBox="0 0 210 115" role="img" aria-label="Step progress gauge">
-          <path d="M20,105 A85,85 0 0,1 190,105" fill="none" stroke="#eee" stroke-width="10" stroke-linecap="round"/>
-          <path id="gaugeArc" d="M20,105 A85,85 0 0,1 190,105" fill="none" stroke="var(--primary,#e55)" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 267" style="transition:stroke-dasharray .5s ease"/>
-          <line id="gaugeNeedle" x1="105" y1="105" x2="20" y2="105" stroke="var(--primary,#e55)" stroke-width="3" stroke-linecap="round" style="transform-origin:105px 105px;transition:transform .5s ease"/>
-          <circle cx="105" cy="105" r="6" fill="var(--primary,#e55)"/>
-          <text x="18" y="120" font-size="9" fill="#aaa" text-anchor="middle">0</text>
-          <text x="192" y="120" font-size="9" fill="#aaa" text-anchor="middle">10k</text>
-        </svg>
-
-        <div class="steps-big" id="stepCount">0</div>
-        <div class="steps-sub">Steps</div>
-      </div>
-
-      <div class="steps-goal">Goal: <span id="goalDisplay">10,000</span> steps</div>
-      <div class="steps-progress" style="margin:8px 0 4px"><div class="steps-bar" id="progressBar" style="width:0%"></div></div>
-      <div class="text-muted" id="progressText" style="font-size:.8rem;margin-bottom:14px">0% of daily goal</div>
-
-      <div class="walk-type-row">
-        <span id="slowLabel">0 · 0%</span>
-        <span>Slow &nbsp;&nbsp; Brisk</span>
-        <span id="briskLabel">0 · 0%</span>
-      </div>
-      <div class="walk-bar-bg">
-        <div class="walk-bar-slow" id="slowBar" style="width:0%"></div>
-        <div class="walk-bar-brisk" id="briskBar" style="width:0%"></div>
-      </div>
-
-      <div style="display:flex;justify-content:space-around;margin:12px 0 16px">
-        <div>
-          <div style="font-size:.75rem;color:#888">Distance</div>
-          <div style="font-size:1.3rem;font-weight:700;color:#29b6f6"><span id="kmDisplay">0.00</span> km</div>
-        </div>
-        <div style="width:1px;background:#eee"></div>
-        <div>
-          <div style="font-size:.75rem;color:#888">Calories</div>
-          <div style="font-size:1.3rem;font-weight:700;color:var(--primary,#e55)"><span id="calDisplay">0</span> kcal</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Stats card -->
-    <div class="dhas-card">
-      <h5>
-        <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-        Today's Stats
-      </h5>
-      <div style="display:flex;justify-content:space-around;text-align:center;margin-top:8px">
-        <div>
-          <div style="font-size:1.4rem;font-weight:700;color:var(--primary)" id="calorieDisplay">0</div>
-          <div class="text-muted" style="font-size:.8rem">Calories</div>
-        </div>
-        <div>
-          <div style="font-size:1.4rem;font-weight:700;color:#29b6f6" id="kmStatDisplay">0.00</div>
-          <div class="text-muted" style="font-size:.8rem">Km Walked</div>
-        </div>
-        <div>
-          <div style="font-size:1.4rem;font-weight:700;color:#22d07a" id="minuteDisplay">0</div>
-          <div class="text-muted" style="font-size:.8rem">Min Active</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Calorie fun -->
-    <div class="cal-fun-card">
+  <div class="page-header">
+    <div class="ph-top">
       <div>
-        <div style="font-size:.8rem;color:#a0522d">Total calories burned</div>
-        <div class="val"><span id="calFunVal">0</span> kcal</div>
-        <div class="sub" id="calFunSub">≈ 0.00 banana chips</div>
+        <div class="ph-title">Activity Tracker</div>
+        <div class="ph-sub" id="dateSub">—</div>
       </div>
-      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#bf360c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
-    </div>
-
-    <!-- WHO goal card -->
-    <div class="dhas-card" style="margin-top:12px">
-      <h5>
-        <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-        Aerobic Exercise (WHO Goal)
-      </h5>
-      <div style="font-size:.8rem;color:#888;margin-bottom:8px">Goal this week: 150 Min (<span id="whoRemaining">150</span> Min remaining)</div>
-      <div class="who-row">
-        <div class="who-ring-wrap">
-          <svg width="76" height="76" viewBox="0 0 76 76" role="img" aria-label="WHO aerobic goal ring">
-            <circle cx="38" cy="38" r="30" fill="none" stroke="#eee" stroke-width="7"/>
-            <circle cx="38" cy="38" r="30" fill="none" stroke="var(--primary,#e55)" stroke-width="7" stroke-linecap="round" stroke-dasharray="188.5" stroke-dashoffset="188.5" transform="rotate(-90 38 38)" id="whoCircle" style="transition:stroke-dashoffset .5s"/>
-          </svg>
-          <div class="who-center">
-            <div class="pct" id="whoPct">0%</div>
-            <div class="mins" id="whoMins">0 Min</div>
-          </div>
-        </div>
-        <div class="who-breakdown" style="flex:1">
-          <div class="item">
-            <span><span class="dot-icon" style="background:var(--primary,#e55)"></span>Brisk walking</span>
-            <span id="briskMinsDisplay">0 Min</span>
-          </div>
-          <div class="item">
-            <span><span class="dot-icon" style="background:#42a5f5"></span>Running</span>
-            <span>0 Min</span>
-          </div>
-          <div class="item">
-            <span><span class="dot-icon" style="background:#ab47bc"></span>Cycling</span>
-            <span>0 Min</span>
-          </div>
-        </div>
+      <div class="sensor-pill waiting" id="sensorPill">
+        <span class="sensor-dot" id="sensorDot" style="display:none"></span>
+        <span id="sensorPillText">Starting…</span>
       </div>
     </div>
-
-    <!-- Weekly summary -->
-    <div class="dhas-card" style="margin-top:12px">
-      <h5>
-        <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-        This Week's Record
-      </h5>
-      <div style="display:flex;gap:12px;text-align:center;margin-bottom:10px">
-        <div style="flex:1"><div style="font-size:1.2rem;font-weight:700" id="weekSteps">0</div><div class="text-muted" style="font-size:.75rem">Steps</div></div>
-        <div style="width:1px;background:#eee"></div>
-        <div style="flex:1"><div style="font-size:1.2rem;font-weight:700" id="weekKm">0.00 km</div><div class="text-muted" style="font-size:.75rem">Distance</div></div>
-        <div style="width:1px;background:#eee"></div>
-        <div style="flex:1"><div style="font-size:1.2rem;font-weight:700" id="weekCal">0 kcal</div><div class="text-muted" style="font-size:.75rem">Calories</div></div>
-      </div>
-      <div class="week-chart" id="weekChart"></div>
-      <div style="display:flex;justify-content:space-between" id="weekDayLabels"></div>
-    </div>
-
   </div>
 
-  <!-- In-page toast -->
-  <div id="dhasToast" role="status" aria-live="polite"></div>
+  <div class="perm-card" id="permCard" style="display:none">
+    Motion sensor access is needed to count your steps.
+    <br><button class="perm-btn" id="permBtn">Enable Step Tracking</button>
+  </div>
 
-<script>
-  // ── In-page toast ─────────────────────────────────────────
-  let _toastTimer = null;
-  function showToast(text, type = "success", duration = 4500) {
-    const t = document.getElementById("dhasToast");
-    if (!t) return;
-    const icon = type === "success" ? "ti-circle-check" : "ti-alert-circle";
-    t.className = type;
-    t.innerHTML = `<i class="ti ${icon}" style="font-size:16px;flex-shrink:0;margin-top:1px" aria-hidden="true"></i><span>${text}</span><button class="toast-dismiss" onclick="this.parentElement.style.display='none'" aria-label="Dismiss"><i class="ti ti-x"></i></button>`;
-    t.style.display = "flex";
-    if (_toastTimer) clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(() => { t.style.display = "none"; }, duration);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // GOOGLE FIT INTEGRATION — v7
-  //
-  // FIX vs v6 (root cause of "steps frozen" + endless GSI_LOGGER
-  // popup-blocked errors):
-  //
-  //   Google Identity Services' silent token refresh
-  //   (requestAccessToken({prompt:""})) will fall back to opening
-  //   an actual popup window whenever it cannot renew the token
-  //   purely from existing session cookies (this is expected and
-  //   common — it happens as soon as the ~1 hour access token
-  //   expires, or whenever third-party cookies are restricted,
-  //   which is increasingly the default in modern browsers).
-  //
-  //   v6 called this silent refresh from setInterval / focus /
-  //   visibilitychange handlers — none of which count as a "user
-  //   gesture" — so the resulting popup was ALWAYS blocked by the
-  //   browser. The code then just relabelled the sync line to
-  //   "retrying…" and tried again a minute later, which failed
-  //   the exact same way forever. Net effect: steps silently
-  //   stopped updating after the first token expiry, with no
-  //   real feedback beyond a wall of console warnings.
-  //
-  //   FIX: a failed silent refresh now immediately switches the
-  //   card into a 4th UI state — "reconnect" — with a real button.
-  //   Clicking that button IS a user gesture, so the interactive
-  //   OAuth popup is allowed through normally. Background timers
-  //   (poll / focus / visibility) no longer attempt silent
-  //   refreshes at all while in this state, so there is no more
-  //   popup-blocked spam. This mirrors the same "never treat a
-  //   failed silent reconnect as ostensibly still-working" lesson
-  //   already applied elsewhere in DHAS's auth flow.
-  // ══════════════════════════════════════════════════════════
-
-  const GFIT_CLIENT_ID     = "935050379586-3vj8chtqv922uqmqurgknmtdseh0vlpv.apps.googleusercontent.com";
-  const GFIT_SCOPE         = "https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/userinfo.email";
-  const GFIT_STORAGE_KEY   = "dhas_googlefit_connection_v2";
-  const GFIT_POLL_MS       = 30 * 1000; // NEW: every 30 seconds — steps now update live
-  const GFIT_MERGED_SOURCE = "derived:com.google.step_count.delta:com.google.android.gms:estimated_steps";
-
-  let gfitAccessToken     = null;
-  let gfitTokenExpiresAt  = 0;
-  let gfitPollTimer       = null;
-  let gfitState           = "checking"; // checking | none | connecting | connected | reconnect
-  let gfitSilentFailCount = 0;          // NEW — tracks consecutive blocked/failed silent refreshes
-  let gfitConnectedEmail  = null;       // NEW — which Google account this token belongs to
-
-  function gfitLoadConnection() {
-    try { return JSON.parse(localStorage.getItem(GFIT_STORAGE_KEY) || "null"); }
-    catch (e) { return null; }
-  }
-  function gfitSaveConnection() {
-    try { localStorage.setItem(GFIT_STORAGE_KEY, JSON.stringify({ connected: true, since: Date.now() })); } catch (e) {}
-  }
-  function gfitClearConnection() {
-    try { localStorage.removeItem(GFIT_STORAGE_KEY); } catch (e) {}
-  }
-
-  // ── Card rendering — 5 possible states now (added "reconnect") ──
-  function renderFitCard() {
-    const el = document.getElementById("fitCardContent");
-    if (!el) return;
-
-    if (gfitState === "checking") {
-      el.innerHTML = `
-        <div style="text-align:center;padding:6px 0;color:var(--text-muted,#6b7fa3);font-size:.85rem;display:flex;align-items:center;justify-content:center;gap:10px;">
-          <div class="spinner-sm"></div> Checking Google Fit connection…
-        </div>`;
-
-    } else if (gfitState === "none") {
-      el.innerHTML = `
-        <h4>
-          <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
-          Sync Activity Data
-        </h4>
-        <p>Connect your fitness account to enable real-time step tracking, calorie analysis, distance monitoring, and weekly health insights.</p>
-        <div class="info-box">
-          <strong>First time using this feature?</strong><br>
-          Install Google Fit and allow Activity Tracking permissions on your phone.<br><br>
-          <a href="https://play.google.com/store/apps/details?id=com.google.android.apps.fitness" target="_blank"
-             style="display:inline-block;background:#34a853;color:white;padding:7px 14px;border-radius:8px;text-decoration:none;font-size:.8rem;font-weight:600">
-            Install Google Fit
-          </a><br><br>
-          <strong>Setup:</strong>
-          <ol style="padding-left:18px;margin-top:6px">
-            <li>Install Google Fit and log in</li>
-            <li>Allow Activity &amp; Fitness permissions</li>
-            <li>Walk with your phone for a few minutes</li>
-            <li>Return here and connect</li>
-          </ol>
+  <!-- Activity Score -->
+  <div class="card">
+    <div class="card-title"><i class="ti ti-gauge"></i> Activity Score</div>
+    <div class="score-hero">
+      <div class="score-ring-wrap">
+        <svg width="118" height="118" viewBox="0 0 118 118">
+          <circle cx="59" cy="59" r="50" fill="none" stroke="var(--border)" stroke-width="10"/>
+          <circle id="scoreArc" cx="59" cy="59" r="50" fill="none" stroke="var(--blue)" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 314"/>
+        </svg>
+        <div class="score-center">
+          <div class="score-num" id="scoreNum">0</div>
+          <div class="score-max">/ 100</div>
         </div>
-        <button onclick="connectGoogleFit()" class="dhas-btn">Connect with Google Fit</button>`;
+      </div>
+      <div class="score-info">
+        <div class="score-label" id="scoreLabel">Getting started</div>
+        <div class="score-stars" id="scoreStars">☆☆☆☆☆</div>
+        <div class="score-breakdown" id="scoreBreakdown"></div>
+      </div>
+    </div>
+  </div>
 
-    } else if (gfitState === "connecting") {
-      el.innerHTML = `
-        <div style="display:flex;align-items:center;gap:10px;padding:6px 0;">
-          <div class="spinner-sm"></div>
-          <span style="font-size:.87rem;color:var(--text,#0d1b3e);">Connecting to Google Fit…</span>
-        </div>`;
+  <!-- Today's Activity -->
+  <div class="card">
+    <div class="card-title"><i class="ti ti-activity"></i> Today's Activity</div>
+    <div class="metric-grid">
+      <div class="metric-card">
+        <div class="metric-icon" style="background:#eff6ff;color:var(--blue)"><i class="ti ti-shoe"></i></div>
+        <div class="metric-val" id="mSteps">0</div>
+        <div class="metric-lbl">Steps</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon" style="background:#fff0e6;color:#e5541f"><i class="ti ti-flame"></i></div>
+        <div class="metric-val" id="mCalories">0</div>
+        <div class="metric-lbl">Calories (kcal)</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon" style="background:#e6faf8;color:var(--teal)"><i class="ti ti-map-pin"></i></div>
+        <div class="metric-val" id="mDistance">0.00</div>
+        <div class="metric-lbl">Distance (km)</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon" style="background:#fdf0ff;color:#a83fd1"><i class="ti ti-walk"></i></div>
+        <div class="metric-val" id="mSlow">0</div>
+        <div class="metric-lbl">Slow Walk (steps)</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon" style="background:#fff8e1;color:#c78a00"><i class="ti ti-run"></i></div>
+        <div class="metric-val" id="mBrisk">0</div>
+        <div class="metric-lbl">Brisk Walk (steps)</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon" style="background:#edfdf4;color:var(--green)"><i class="ti ti-clock"></i></div>
+        <div class="metric-val" id="mActiveMin">0</div>
+        <div class="metric-lbl">Active Minutes</div>
+      </div>
+    </div>
+  </div>
 
-    } else if (gfitState === "connected") {
-      const emailLine = gfitConnectedEmail
-        ? `<div style="font-size:.72rem;color:var(--text-muted,#6b7fa3);margin-top:2px;">Connected as ${gfitConnectedEmail}</div>`
-        : "";
-      el.innerHTML = `
-        <div class="fit-status-row">
-          <div class="fit-status-left">
-            <div class="fit-status-icon ok">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2e7d32" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
-            </div>
-            <div style="min-width:0;">
-              <div class="fit-status-title ok">Connected to Google Fit</div>
-              <div class="fit-status-sub" id="fitLastSync">Syncing…</div>
-              ${emailLine}
-            </div>
-          </div>
-          <div class="fit-actions">
-            <button onclick="gfitManualSync(this)" class="fit-reconnect-btn" id="fitSyncNowBtn">Sync Now</button>
-            <button onclick="disconnectGoogleFit()" class="fit-disconnect-btn">Disconnect</button>
-          </div>
-        </div>`;
+  <!-- Goal Dashboard -->
+  <div class="card">
+    <div class="card-title"><i class="ti ti-target"></i> Daily Goal</div>
+    <div class="goal-row">
+      <div class="goal-ring-wrap">
+        <svg width="130" height="130" viewBox="0 0 130 130">
+          <circle cx="65" cy="65" r="55" fill="none" stroke="var(--border)" stroke-width="11"/>
+          <circle id="goalArc" cx="65" cy="65" r="55" fill="none" stroke="var(--blue)" stroke-width="11" stroke-linecap="round" stroke-dasharray="0 345"/>
+        </svg>
+        <div class="goal-center">
+          <div class="goal-pct" id="goalPct">0%</div>
+          <div class="goal-steps" id="goalStepsTxt">0 / 10,000</div>
+        </div>
+      </div>
+      <div class="goal-info">
+        <div class="goal-remaining" id="goalRemaining">10,000 steps to go</div>
+        <div class="goal-msg" id="goalMsg">Let's get moving!</div>
+      </div>
+    </div>
+  </div>
 
-    } else if (gfitState === "reconnect") {
-      // NEW STATE — shown the moment a silent token refresh fails.
-      // This is a lightweight inline prompt, NOT the full "Connect"
-      // onboarding card — the connection itself is still remembered,
-      // it just needs one click to renew the expired Google session.
-      el.innerHTML = `
-        <div class="fit-status-row">
-          <div class="fit-status-left">
-            <div class="fit-status-icon warn">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f57f17" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg>
-            </div>
-            <div style="min-width:0;">
-              <div class="fit-status-title warn">Google Fit session expired</div>
-              <div class="fit-status-sub">Tap Reconnect to resume live step syncing.</div>
-            </div>
-          </div>
-          <div class="fit-actions">
-            <button onclick="reconnectGoogleFit()" class="fit-reconnect-btn">Reconnect</button>
-            <button onclick="disconnectGoogleFit()" class="fit-disconnect-btn">Disconnect</button>
-          </div>
-        </div>`;
-    }
-  }
+  <!-- Streak -->
+  <div class="card">
+    <div class="card-title"><i class="ti ti-flame"></i> Walking Streak</div>
+    <div class="streak-row">
+      <div class="streak-box">
+        <div class="streak-flame">🔥</div>
+        <div class="streak-num" id="streakCurrent">0</div>
+        <div class="streak-lbl">Current</div>
+      </div>
+      <div class="streak-box">
+        <div class="streak-flame">👑</div>
+        <div class="streak-num" id="streakLongest">0</div>
+        <div class="streak-lbl">Longest</div>
+      </div>
+      <div class="streak-box">
+        <div class="streak-flame">📅</div>
+        <div class="streak-num" id="streakTotalDays">0</div>
+        <div class="streak-lbl">Active Days</div>
+      </div>
+    </div>
+  </div>
 
-  function setGfitState(state) {
-    gfitState = state;
-    renderFitCard();
-  }
+  <!-- Weekly Analytics -->
+  <div class="card">
+    <div class="card-title"><i class="ti ti-chart-bar"></i> Weekly Analytics</div>
+    <div class="week-chart" id="weekChart"></div>
+    <div style="display:flex;justify-content:space-between" id="weekDayLabels"></div>
+    <div class="week-stats">
+      <div class="week-stat">Total Steps<b id="wkSteps">0</b></div>
+      <div class="week-stat">Avg Daily Steps<b id="wkAvg">0</b></div>
+      <div class="week-stat">Total Distance<b id="wkDist">0.00 km</b></div>
+      <div class="week-stat">Total Calories<b id="wkCal">0 kcal</b></div>
+      <div class="week-stat">Best Day<b id="wkBest">—</b></div>
+      <div class="week-stat">vs Last Week<b id="wkTrend">—</b></div>
+    </div>
+  </div>
 
-  // NEW — identifies WHICH Google account this access token belongs to.
-  // The #1 cause of "Fit app shows 105 but DHAS shows 7" is that the
-  // browser popup was signed into a different Google account than the
-  // one your phone's Fit app actually syncs to — the REST API can only
-  // ever see data belonging to the account that granted the token.
-  async function gfitFetchAccountEmail(accessToken) {
-    try {
-      const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-        headers: { "Authorization": `Bearer ${accessToken}` },
-        cache: "no-store"
-      });
-      if (!res.ok) return null;
-      const data = await res.json();
-      return data.email || null;
-    } catch (e) {
-      return null;
-    }
-  }
+  <!-- Lifetime Statistics -->
+  <div class="card">
+    <div class="card-title"><i class="ti ti-infinity"></i> Lifetime Statistics</div>
+    <div class="lifetime-grid">
+      <div class="life-item"><div class="life-icon" style="background:#eff6ff;color:var(--blue)"><i class="ti ti-shoe"></i></div><div><div class="life-val" id="lSteps">0</div><div class="life-lbl">Total Steps</div></div></div>
+      <div class="life-item"><div class="life-icon" style="background:#fff0e6;color:#e5541f"><i class="ti ti-flame"></i></div><div><div class="life-val" id="lCal">0</div><div class="life-lbl">Total Calories</div></div></div>
+      <div class="life-item"><div class="life-icon" style="background:#e6faf8;color:var(--teal)"><i class="ti ti-map-pin"></i></div><div><div class="life-val" id="lDist">0.00 km</div><div class="life-lbl">Total Distance</div></div></div>
+      <div class="life-item"><div class="life-icon" style="background:#fff8e1;color:#c78a00"><i class="ti ti-trophy"></i></div><div><div class="life-val" id="lHigh">0</div><div class="life-lbl">Highest Day</div></div></div>
+      <div class="life-item"><div class="life-icon" style="background:#fdf0ff;color:#a83fd1"><i class="ti ti-crown"></i></div><div><div class="life-val" id="lStreak">0</div><div class="life-lbl">Longest Streak</div></div></div>
+      <div class="life-item"><div class="life-icon" style="background:#edfdf4;color:var(--green)"><i class="ti ti-calendar-check"></i></div><div><div class="life-val" id="lDays">0</div><div class="life-lbl">Active Days</div></div></div>
+      <div class="life-item"><div class="life-icon" style="background:#f0f9ff;color:#0284c7"><i class="ti ti-clock"></i></div><div><div class="life-val" id="lMins">0</div><div class="life-lbl">Walking Minutes</div></div></div>
+      <div class="life-item"><div class="life-icon" style="background:#fef2f2;color:#dc2626"><i class="ti ti-checkbox"></i></div><div><div class="life-val" id="lGoals">0</div><div class="life-lbl">Goals Completed</div></div></div>
+    </div>
+  </div>
 
-  // Sums every step-count point across every dataset in every bucket.
-  function gfitSumSteps(data) {
-    let total = 0;
-    if (!data || !Array.isArray(data.bucket)) return 0;
-    data.bucket.forEach(bucket => {
-      if (!Array.isArray(bucket.dataset)) return;
-      bucket.dataset.forEach(dataset => {
-        if (!Array.isArray(dataset.point)) return;
-        dataset.point.forEach(point => {
-          if (Array.isArray(point.value) && point.value.length > 0) {
-            total += point.value[0].intVal || 0;
-          }
-        });
-      });
-    });
-    return total;
-  }
+  <!-- Achievements -->
+  <div class="card">
+    <div class="card-title"><i class="ti ti-award"></i> Achievements</div>
+    <div class="ach-grid" id="achGrid"></div>
+  </div>
 
-  // FIX: query BOTH the unrestricted aggregate AND the specific
-  // "estimated_steps" merged source (the one the Fit app itself reads
-  // from), then take the HIGHER of the two totals.
-  //
-  // Why: depending on the phone/account, either query alone can
-  // under-report — the unrestricted query sometimes returns a stale/
-  // partial merge, while the specific estimated_steps source is what
-  // the Fit app UI actually displays. Taking the max avoids ever
-  // showing DHAS's number LOWER than what's really on the phone,
-  // without guessing which single source is "correct" up front.
-  //
-  // NOTE: if the number DHAS shows is still far below your phone's
-  // Fit app (e.g. 7 vs 105), that is not something this code can fix —
-  // it means either (a) the Google account you signed into here is
-  // different from the one your phone's Fit app uses, or (b) your
-  // phone hasn't uploaded today's steps to Google's cloud yet (Fit
-  // app running in the background, screen on, battery saver off).
-  // The "Connected as" email shown on the card lets you check (a).
-  async function gfitFetchTodaySteps(accessToken) {
-    const startTimeMillis = new Date().setHours(0, 0, 0, 0);
-    const endTimeMillis   = Date.now();
+  <!-- Weekly Challenge -->
+  <div class="card">
+    <div class="card-title"><i class="ti ti-flag"></i> Weekly Challenge</div>
+    <div class="challenge-box">
+      <div class="challenge-title" id="chTitle"><i class="ti ti-target"></i> —</div>
+      <div class="challenge-sub" id="chSub">—</div>
+      <div class="challenge-bar-track"><div class="challenge-bar-fill" id="chBar" style="width:0%"></div></div>
+      <div class="challenge-progress-txt" id="chProgressTxt">0 / 0</div>
+      <div id="chDoneBadge" style="display:none" class="challenge-done-badge"><i class="ti ti-circle-check"></i> Completed!</div>
+    </div>
+  </div>
 
-    async function runAggregate(dataSourceId) {
-      const aggregateBy = dataSourceId
-        ? [{ dataTypeName: "com.google.step_count.delta", dataSourceId }]
-        : [{ dataTypeName: "com.google.step_count.delta" }];
+  <!-- Insights -->
+  <div class="card">
+    <div class="card-title"><i class="ti ti-bulb"></i> Activity Insights</div>
+    <div id="insightsList"></div>
+  </div>
 
-      const res = await fetch(
-        "https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate",
-        {
-          method: "POST",
-          cache: "no-store",
-          headers: {
-            "Authorization": `Bearer ${accessToken}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            aggregateBy,
-            bucketByTime: { durationMillis: 86400000 },
-            startTimeMillis,
-            endTimeMillis
-          })
-        }
-      );
+  <!-- Monthly Calendar -->
+  <div class="card">
+    <div class="card-title"><i class="ti ti-calendar"></i> Monthly Activity</div>
+    <div class="cal-header">
+      <button class="cal-nav-btn" id="calPrev"><i class="ti ti-chevron-left"></i></button>
+      <div class="cal-month-lbl" id="calMonthLbl">—</div>
+      <button class="cal-nav-btn" id="calNext"><i class="ti ti-chevron-right"></i></button>
+    </div>
+    <div class="cal-grid" id="calDow"></div>
+    <div class="cal-grid" id="calGrid" style="margin-top:5px"></div>
+    <div class="cal-legend">
+      <span><span class="sw" style="background:var(--border)"></span>No data</span>
+      <span><span class="sw" style="background:rgba(242,92,125,.5)"></span>Low</span>
+      <span><span class="sw" style="background:rgba(244,160,53,.65)"></span>Moderate</span>
+      <span><span class="sw" style="background:linear-gradient(135deg,var(--green),#16c268)"></span>Goal met</span>
+    </div>
+  </div>
 
-      if (res.status === 401) {
-        const err = new Error("Google Fit access token is no longer valid.");
-        err.unauthorized = true;
-        throw err;
-      }
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Fit API responded ${res.status}: ${text.slice(0, 200)}`);
-      }
-      return gfitSumSteps(await res.json());
-    }
+</div>
 
-    const [unrestrictedResult, mergedResult] = await Promise.allSettled([
-      runAggregate(null),
-      runAggregate(GFIT_MERGED_SOURCE)
-    ]);
+<div class="day-modal-overlay" id="dayModalOverlay">
+  <div class="day-modal">
+    <h3 id="dayModalTitle">—</h3>
+    <div class="day-modal-row"><span>Steps</span><b id="dmSteps">0</b></div>
+    <div class="day-modal-row"><span>Calories</span><b id="dmCal">0 kcal</b></div>
+    <div class="day-modal-row"><span>Distance</span><b id="dmDist">0.00 km</b></div>
+    <div class="day-modal-row"><span>Brisk Minutes</span><b id="dmBrisk">0</b></div>
+    <div class="day-modal-row"><span>Goal Completion</span><b id="dmGoal">0%</b></div>
+    <button class="day-modal-close" id="dayModalClose">Close</button>
+  </div>
+</div>
 
-    // If BOTH calls failed with 401, the token is genuinely dead —
-    // bubble that up so gfitApplySync() can trigger a reconnect.
-    if (unrestrictedResult.status === "rejected" && mergedResult.status === "rejected") {
-      const bothUnauthorized =
-        unrestrictedResult.reason?.unauthorized || mergedResult.reason?.unauthorized;
-      const err = new Error("Both Google Fit queries failed.");
-      err.unauthorized = !!bothUnauthorized;
-      throw err;
-    }
+<div id="dhasToast" role="status" aria-live="polite"></div>
 
-    const a = unrestrictedResult.status === "fulfilled" ? unrestrictedResult.value : 0;
-    const b = mergedResult.status === "fulfilled" ? mergedResult.value : 0;
-    const total = Math.max(a, b);
-
-    console.log(`[GoogleFit] unrestricted=${a}, estimated_steps=${b} → using ${total}`);
-    return total;
-  }
-
-  // Wraps GIS's token flow in a Promise.
-  //   prompt=""        → silent, NEVER call this from a timer/focus
-  //                       handler without expecting it may fail —
-  //                       see gfitGetValidToken() below.
-  //   prompt=undefined  → interactive, MUST be called from a direct
-  //                       user gesture (click) or the resulting
-  //                       popup will be blocked by the browser.
-  function gfitRequestToken(prompt) {
-    return new Promise((resolve) => {
-      if (typeof google === "undefined" || !google.accounts) { resolve(null); return; }
-      try {
-        const client = google.accounts.oauth2.initTokenClient({
-          client_id: GFIT_CLIENT_ID,
-          scope: GFIT_SCOPE,
-          callback: (response) => {
-            if (!response || !response.access_token) { resolve(null); return; }
-            resolve(response);
-          },
-          error_callback: () => resolve(null)
-        });
-        client.requestAccessToken(prompt === undefined ? {} : { prompt });
-      } catch (e) {
-        resolve(null);
-      }
-    });
-  }
-
-  // Returns a valid access token, silently refreshing if missing/expiring.
-  // Returns null on failure — NEVER touches gfitState itself; the
-  // caller (gfitSyncNow) decides what to do with a null result.
-  async function gfitGetValidToken() {
-    const now = Date.now();
-    if (gfitAccessToken && now < gfitTokenExpiresAt - 60000) {
-      return gfitAccessToken;
-    }
-    const response = await gfitRequestToken("");
-    if (!response) return null;
-    gfitAccessToken    = response.access_token;
-    gfitTokenExpiresAt = now + (response.expires_in || 3600) * 1000;
-    gfitSaveConnection();
-    return gfitAccessToken;
-  }
-
-  function gfitPaintSyncLabel(text) {
-    const el = document.getElementById("fitLastSync");
-    if (el) el.textContent = text;
-  }
-
-  // Runs one sync attempt using an ALREADY-VALID token. Never changes
-  // gfitState on failure here — that's handled one level up now.
-  async function gfitApplySync(accessToken) {
-    try {
-      // Look up the connected account once (not every 30s) so the user
-      // can verify it matches the account their phone's Fit app uses.
-      if (!gfitConnectedEmail) {
-        gfitConnectedEmail = await gfitFetchAccountEmail(accessToken);
-        if (gfitConnectedEmail) renderFitCard();
-      }
-
-      const totalSteps = await gfitFetchTodaySteps(accessToken);
-      if (window.DHAS_setStepsFromGoogleFit) {
-        window.DHAS_setStepsFromGoogleFit(totalSteps);
-      }
-      const timeStr = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-      gfitPaintSyncLabel(`${totalSteps.toLocaleString()} steps · synced ${timeStr}`);
-      return true;
-    } catch (err) {
-      console.warn("[GoogleFit] sync attempt failed:", err.message);
-      if (err && err.unauthorized) gfitAccessToken = null; // force a fresh token attempt next time
-      throw err;
-    }
-  }
-
-  // ── Single entry point for every sync trigger (poll / focus /
-  //    visibility / manual connect). ───────────────────────────
-  //
-  // FIX: a failed silent token refresh now immediately flips the
-  // card to the "reconnect" state and STOPS the background poll,
-  // instead of quietly retrying forever from a context that can
-  // never succeed (no user gesture → popup always blocked).
-  async function gfitSyncNow() {
-    if (gfitState !== "connected" && gfitState !== "connecting") return;
-
-    const token = await gfitGetValidToken();
-    if (!token) {
-      gfitSilentFailCount++;
-      console.warn(`[GoogleFit] Silent refresh failed (attempt ${gfitSilentFailCount}) — switching to Reconnect.`);
-      stopGfitPolling();
-      setGfitState("reconnect");
-      return;
-    }
-
-    gfitSilentFailCount = 0;
-    try {
-      await gfitApplySync(token);
-    } catch (e) {
-      // A concrete API failure (not a token problem) — surface it
-      // without tearing down the connection; try again next cycle.
-      const timeStr = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-      gfitPaintSyncLabel(`Last checked ${timeStr} — retrying…`);
-    }
-  }
-
-  // ── Strict 30-second auto re-sync, only while genuinely connected ──
-  function startGfitPolling() {
-    stopGfitPolling();
-    gfitPollTimer = setInterval(() => { gfitSyncNow(); }, GFIT_POLL_MS);
-  }
-  function stopGfitPolling() {
-    if (gfitPollTimer) { clearInterval(gfitPollTimer); gfitPollTimer = null; }
-  }
-
-  // Force an immediate resync when the tab regains focus/visibility.
-  // Guarded inside gfitSyncNow() itself (only runs while "connected"),
-  // so this is a no-op while sitting in "reconnect" — it will NOT
-  // spam more blocked popups just because the user switched tabs.
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) gfitSyncNow();
-  });
-  window.addEventListener("focus", () => gfitSyncNow());
-
-  // ── Manual connect (button click — has a real user gesture) ─────
-  async function connectGoogleFit() {
-    setGfitState("connecting");
-    const response = await gfitRequestToken(undefined);
-    if (!response) {
-      showToast("Google Fit connection was cancelled or failed.", "error");
-      setGfitState("none");
-      return;
-    }
-    gfitAccessToken     = response.access_token;
-    gfitTokenExpiresAt  = Date.now() + (response.expires_in || 3600) * 1000;
-    gfitSilentFailCount = 0;
-    gfitSaveConnection();
-
-    setGfitState("connected");
-    try {
-      await gfitApplySync(gfitAccessToken);
-    } catch (e) {
-      gfitPaintSyncLabel("Connected — waiting for first sync…");
-    }
-    startGfitPolling();
-    showToast("Connected to Google Fit.", "success");
-  }
-  window.connectGoogleFit = connectGoogleFit;
-
-  // ── NEW: Reconnect (button click — also a real user gesture) ────
-  // This is the fix for the "always blocked popup" bug: an
-  // interactive requestAccessToken() call made directly inside a
-  // click handler is allowed by the browser's popup blocker, unlike
-  // the same call made from setInterval/focus/visibilitychange.
-  async function reconnectGoogleFit() {
-    setGfitState("connecting");
-    const response = await gfitRequestToken(undefined);
-    if (!response) {
-      showToast("Reconnection was cancelled or failed. Please try again.", "error");
-      setGfitState("reconnect");
-      return;
-    }
-    gfitAccessToken     = response.access_token;
-    gfitTokenExpiresAt  = Date.now() + (response.expires_in || 3600) * 1000;
-    gfitSilentFailCount = 0;
-    gfitSaveConnection();
-
-    setGfitState("connected");
-    try {
-      await gfitApplySync(gfitAccessToken);
-      showToast("Reconnected to Google Fit — steps updated.", "success");
-    } catch (e) {
-      gfitPaintSyncLabel("Reconnected — waiting for first sync…");
-      showToast("Reconnected to Google Fit.", "success");
-    }
-    startGfitPolling();
-  }
-  window.reconnectGoogleFit = reconnectGoogleFit;
-
-  // ── NEW: manual "Sync Now" button — forces an immediate re-fetch
-  //    instead of waiting for the next 30-second tick. Useful right
-  //    after you've walked somewhere and want to see the number jump
-  //    without waiting. ──────────────────────────────────────────
-  async function gfitManualSync(btn) {
-    if (btn) { btn.disabled = true; btn.textContent = "Syncing…"; }
-    await gfitSyncNow();
-    if (btn) { btn.disabled = false; btn.textContent = "Sync Now"; }
-  }
-  window.gfitManualSync = gfitManualSync;
-
-  // ── Silent reconnect on page load — never shows an error state.
-  //    If the very first silent check fails, gfitSyncNow() (called
-  //    below) will now correctly land in "reconnect" instead of
-  //    silently spinning forever. ──────────────────────────────
-  async function gfitTrySilentReconnect() {
-    const record = gfitLoadConnection();
-    if (!record || !record.connected) { setGfitState("none"); return; }
-
-    setGfitState("connected");
-    startGfitPolling();
-    await gfitSyncNow();
-  }
-
-  // ── Disconnect (explicit user action — the ONLY path that clears
-  //    the stored connection and shows the "none" card again) ──────
-  function disconnectGoogleFit() {
-    stopGfitPolling();
-    if (gfitAccessToken && typeof google !== "undefined" && google.accounts && google.accounts.oauth2.revoke) {
-      try { google.accounts.oauth2.revoke(gfitAccessToken, () => {}); } catch (e) {}
-    }
-    gfitAccessToken     = null;
-    gfitTokenExpiresAt  = 0;
-    gfitSilentFailCount = 0;
-    gfitConnectedEmail  = null;
-    gfitClearConnection();
-    if (window.DHAS_clearGoogleFit) window.DHAS_clearGoogleFit();
-    setGfitState("none");
-    showToast("Disconnected from Google Fit. Switched back to on-device tracking.", "success");
-  }
-  window.disconnectGoogleFit = disconnectGoogleFit;
-
-  // Kick off silent reconnect once GIS + steps.js hooks are ready.
-  window.addEventListener("load", () => {
-    setTimeout(gfitTrySilentReconnect, 300);
-  });
-</script>
-  <script src="js/steps.js"></script>
+<script src="js/steps.js"></script>
 </body>
 </html>
