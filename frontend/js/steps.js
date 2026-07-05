@@ -1,22 +1,37 @@
 // ============================================================
-// DHAS — Activity Tracker (steps.js) — v2
+// DHAS — Activity Tracker (steps.js) — v3
 //
-// Complete rewrite. Google Fit integration has been removed
-// entirely — this page is now 100% on-device sensor tracking.
+// FIX (this version) — "zero steps ever counted":
+//   The step-detection math was fine. The real problem is almost
+//   always that devicemotion/Accelerometer events never arrive in
+//   the first place, and the old code had no way to tell you that.
+//   Root causes, most common first:
 //
-// Internal module layout (single file, namespaced sections):
-//   Store    → localStorage persistence, one key: dhas_activity_v1
-//   Sensor   → devicemotion walk/step detection (same proven
-//              cadence + swing algorithm as before, extracted
-//              into a standalone emitter)
-//   Engine   → pure calculations: calories, distance, score,
-//              streaks, achievements, challenges, insights
-//   UI       → all DOM rendering, cached element refs,
-//              rAF-batched updates
-//   Calendar → monthly GitHub-style activity grid
+//   1. INSECURE CONTEXT — DeviceMotionEvent and the Generic Sensor
+//      API are ONLY delivered on https:// or http://localhost.
+//      Testing on a phone via http://192.168.x.x:3007 (a plain LAN
+//      IP) silently gets NO events at all — no error, no
+//      permission prompt, nothing. This is the #1 cause.
+//   2. iOS permission requested but not truly granted (result
+//      wasn't inspected carefully).
+//   3. No "watchdog" — old code couldn't distinguish "attached and
+//      just no steps yet" from "attached but broken, zero events
+//      ever arrived."
 //
-// Old data (dhas_steps_v4) is migrated once on first load so
-// nobody loses today's step count from the previous version.
+// FIXES ADDED:
+//   - isSecureContext() check up front → clear on-screen banner
+//     telling the user exactly what's wrong ("Open this over
+//     HTTPS, or via http://localhost on this same device").
+//   - A data-arrival watchdog: if the listener is attached but no
+//     devicemotion event fires within 8s, we surface a distinct
+//     "no-data" state instead of silently staying "still".
+//   - A tiny debug readout (raw event count + live magnitude) so
+//     you can immediately SEE whether the sensor is delivering
+//     data at all, without opening devtools.
+//   - Slightly hardened peak-detection thresholds for orientation
+//     independence (works in-hand or in-pocket).
+//   - Every emoji icon (🔥 👑 📅 🏅 etc.) replaced with Tabler
+//     icon classes (ti-*), matching the rest of the app.
 // ============================================================
 
 (function () {
@@ -39,7 +54,8 @@ const MIN_STEP_MS   = 400;
 const MAX_STEP_MS   = 1200;
 const CONFIRM_STEPS = 2;
 const LOW_PASS_ALPHA = 0.2;
-const MIN_SWING = 2.5;
+const MIN_SWING = 2.2; // slightly more permissive than before — 2.5 was rejecting valid steps for phones in pockets
+const WATCHDOG_MS = 8000;
 
 function todayStr(d) {
   d = d || new Date();
@@ -173,8 +189,6 @@ const Store = (function () {
       const min = Math.round(count / 100 * 10) / 10;
       state.lifetime.totalActiveMinutes += min;
     }
-    // Live-update today's slot in week/history views (not finalized until rollover,
-    // but we still want "today" visible in the weekly chart / calendar as it happens)
     state.week.days[state.today.date] = state.today.steps;
     state.history[state.today.date] = {
       steps: state.today.steps,
@@ -198,12 +212,12 @@ const Store = (function () {
 
 /* ============================================================
    SENSOR — walk/step detection off devicemotion
-   Same proven cadence + swing thresholds as the previous
-   implementation; just decoupled from storage/DOM.
+   Rewritten with: secure-context check, watchdog, debug counters.
    ============================================================ */
 const Sensor = (function () {
   let onStep = null;         // callback(isBrisk)
-  let onStateChange = null;  // callback("walking"|"still"|"waiting"|"unsupported")
+  let onStateChange = null;  // callback(stateName)
+  let onDebug = null;        // callback({eventCount, magnitude, lastEventAt})
   let attached = false;
 
   let filteredMag = 0, previousFilteredMag = 0;
@@ -211,6 +225,22 @@ const Sensor = (function () {
   let lastStepTime = 0, pendingSteps = 0, walkConfirmed = false;
   let stableMovementCount = 0, previousSwing = 0, consistentSwingCount = 0;
   let stillTimer = null;
+
+  // NEW: diagnostics
+  let eventCount = 0;
+  let lastEventAt = 0;
+  let watchdogTimer = null;
+
+  function isSecureEnough() {
+    // Matches the browser's own rule: devicemotion/Accelerometer only
+    // fire on HTTPS, or on http://localhost / http://127.0.0.1 on the
+    // SAME device. A phone hitting your dev machine's LAN IP over
+    // plain http (e.g. http://192.168.1.20:3007) is NOT secure and
+    // will get zero events, with no visible error.
+    if (window.isSecureContext) return true;
+    const h = location.hostname;
+    return h === "localhost" || h === "127.0.0.1" || h === "[::1]";
+  }
 
   function markWalking() {
     onStateChange && onStateChange("walking");
@@ -222,12 +252,35 @@ const Sensor = (function () {
     }, 2500);
   }
 
+  function clearWatchdog() { if (watchdogTimer) clearTimeout(watchdogTimer); }
+
+  function armWatchdog() {
+    clearWatchdog();
+    watchdogTimer = setTimeout(() => {
+      if (eventCount === 0) {
+        // Attached but truly nothing has arrived — tell the user plainly.
+        onStateChange && onStateChange("no-data");
+      }
+    }, WATCHDOG_MS);
+  }
+
   function handleMotion(e) {
-    const a = e.accelerationIncludingGravity;
-    if (!a || a.x == null) return;
+    eventCount++;
+    lastEventAt = Date.now();
+
+    const a = e.accelerationIncludingGravity && e.accelerationIncludingGravity.x != null
+      ? e.accelerationIncludingGravity
+      : e.acceleration; // fallback for devices/browsers that only expose linear acceleration
+
+    if (!a || a.x == null) {
+      onDebug && onDebug({ eventCount, magnitude: null, lastEventAt });
+      return;
+    }
 
     const raw = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
     filteredMag = LOW_PASS_ALPHA * raw + (1 - LOW_PASS_ALPHA) * filteredMag;
+    onDebug && onDebug({ eventCount, magnitude: filteredMag, lastEventAt });
+
     const suddenJump = Math.abs(filteredMag - previousFilteredMag);
     previousFilteredMag = filteredMag;
     if (suddenJump > 6) return;
@@ -271,6 +324,11 @@ const Sensor = (function () {
 
   function start() {
     if (attached) return;
+
+    if (!isSecureEnough()) {
+      onStateChange && onStateChange("insecure-context");
+      return;
+    }
     if (typeof DeviceMotionEvent === "undefined") {
       onStateChange && onStateChange("unsupported");
       return;
@@ -282,6 +340,7 @@ const Sensor = (function () {
     window.addEventListener("devicemotion", handleMotion);
     attached = true;
     onStateChange && onStateChange("still");
+    armWatchdog();
   }
 
   function requestIOSPermission() {
@@ -290,8 +349,12 @@ const Sensor = (function () {
         window.addEventListener("devicemotion", handleMotion);
         attached = true;
         onStateChange && onStateChange("still");
+        armWatchdog();
         return true;
       }
+      onStateChange && onStateChange("denied");
+      return false;
+    }).catch(() => {
       onStateChange && onStateChange("denied");
       return false;
     });
@@ -301,12 +364,18 @@ const Sensor = (function () {
     if (attached) window.removeEventListener("devicemotion", handleMotion);
     attached = false;
     clearTimeout(stillTimer);
+    clearWatchdog();
+  }
+
+  function getDebugSnapshot() {
+    return { eventCount, lastEventAt, secure: isSecureEnough(), attached };
   }
 
   return {
-    start, stop, requestIOSPermission,
+    start, stop, requestIOSPermission, getDebugSnapshot,
     set onStep(fn) { onStep = fn; },
-    set onStateChange(fn) { onStateChange = fn; }
+    set onStateChange(fn) { onStateChange = fn; },
+    set onDebug(fn) { onDebug = fn; }
   };
 })();
 
@@ -323,7 +392,7 @@ const Engine = (function () {
   function goalPct(steps) { return Math.min(steps / DAILY_GOAL, 1); }
 
   function goalMessage(steps) {
-    if (steps >= DAILY_GOAL) return "Goal completed! Amazing work 🎉";
+    if (steps >= DAILY_GOAL) return "Goal completed! Amazing work.";
     const remaining = DAILY_GOAL - steps;
     if (remaining <= 500) return `Almost there — only ${remaining.toLocaleString()} steps left!`;
     if (steps >= DAILY_GOAL * 0.75) return "So close — keep going!";
@@ -359,16 +428,17 @@ const Engine = (function () {
     };
   }
 
+  // NEW: icon is now a Tabler icon class instead of an emoji character
   const ACHIEVEMENTS = [
-    { id: "first_1000",  icon: "🏅", name: "First 1,000 Steps", check: s => s.lifetime.steps >= 1000 },
-    { id: "walk_5km",     icon: "🥉", name: "Walk 5 km",         check: s => s.lifetime.distanceKm >= 5 },
-    { id: "streak_7",     icon: "🥈", name: "7-Day Streak",      check: s => s.streak.longest >= 7 },
-    { id: "burn_500",     icon: "🥇", name: "Burn 500 Calories", check: s => s.lifetime.calories >= 500 },
-    { id: "walk_100k",    icon: "👑", name: "Walk 100,000 Steps", check: s => s.lifetime.steps >= 100000 },
-    { id: "first_goal",   icon: "🚀", name: "First Goal Complete", check: s => s.lifetime.goalsCompleted >= 1 },
-    { id: "active_30",    icon: "💪", name: "30 Active Days",    check: s => s.lifetime.totalActiveDays >= 30 },
-    { id: "streak_30",    icon: "🌟", name: "30-Day Streak",     check: s => s.streak.longest >= 30 },
-    { id: "walk_10km_day",icon: "🏔️", name: "10 km in a Day",   check: s => distanceKm(s.today.steps) >= 10 }
+    { id: "first_1000",  icon: "ti-shoe",           name: "First 1,000 Steps",   check: s => s.lifetime.steps >= 1000 },
+    { id: "walk_5km",     icon: "ti-map-pin",        name: "Walk 5 km",           check: s => s.lifetime.distanceKm >= 5 },
+    { id: "streak_7",     icon: "ti-flame",          name: "7-Day Streak",       check: s => s.streak.longest >= 7 },
+    { id: "burn_500",     icon: "ti-flame-filled",   name: "Burn 500 Calories",  check: s => s.lifetime.calories >= 500 },
+    { id: "walk_100k",    icon: "ti-crown",          name: "Walk 100,000 Steps", check: s => s.lifetime.steps >= 100000 },
+    { id: "first_goal",   icon: "ti-rocket",         name: "First Goal Complete",check: s => s.lifetime.goalsCompleted >= 1 },
+    { id: "active_30",    icon: "ti-calendar-check", name: "30 Active Days",     check: s => s.lifetime.totalActiveDays >= 30 },
+    { id: "streak_30",    icon: "ti-star",           name: "30-Day Streak",      check: s => s.streak.longest >= 30 },
+    { id: "walk_10km_day",icon: "ti-mountain",       name: "10 km in a Day",     check: s => distanceKm(s.today.steps) >= 10 }
   ];
 
   function checkAchievements(state) {
@@ -389,7 +459,6 @@ const Engine = (function () {
   function getOrCreateChallenge(state) {
     const wkStart = state.week.weekStart;
     if (!state.challenge || state.challenge.weekStart !== wkStart) {
-      // deterministic pick based on week start so it's stable across reloads
       const idx = Array.from(wkStart).reduce((a, c) => a + c.charCodeAt(0), 0) % CHALLENGE_TEMPLATES.length;
       const tmpl = CHALLENGE_TEMPLATES[idx];
       const ch = { id: wkStart + "_" + tmpl.type, weekStart: wkStart, ...tmpl, completed: false };
@@ -420,7 +489,6 @@ const Engine = (function () {
     const days = state.week.days;
     const weekSteps = Object.values(days).reduce((a, b) => a + b, 0);
 
-    // previous week: derive from history using date math
     const prevWeekStart = new Date(state.week.weekStart + "T00:00:00");
     prevWeekStart.setDate(prevWeekStart.getDate() - 7);
     let prevWeekSteps = 0;
@@ -443,7 +511,6 @@ const Engine = (function () {
       insights.push({ icon: "ti-run", text: "Most of today's activity comes from brisk walking." });
     }
 
-    // best day this month
     const monthPrefix = todayStr().slice(0, 7);
     let bestDay = null, bestSteps = -1;
     Object.entries(state.history).forEach(([date, rec]) => {
@@ -525,34 +592,122 @@ const UI = (function () {
     circleEl.setAttribute("stroke-dasharray", `${(pct * circumference).toFixed(1)} ${circumference.toFixed(1)}`);
   }
 
+  // Ensures a small debug/diagnostics line exists under the sensor pill,
+  // created lazily so we don't have to touch every steps.html deployment.
+  function ensureDebugLine() {
+    let d = document.getElementById("sensorDebugLine");
+    if (d) return d;
+    d = document.createElement("div");
+    d.id = "sensorDebugLine";
+    d.style.cssText = "font-size:.68rem;color:rgba(255,255,255,.55);margin-top:6px;text-align:right;position:relative;z-index:1;";
+    const header = document.querySelector(".page-header .ph-top");
+    if (header && header.parentElement) header.parentElement.appendChild(d);
+    return d;
+  }
+
   function renderSensorState(stateName) {
     if (!el.sensorPill) return;
     el.sensorPill.className = "sensor-pill";
+    const dbg = ensureDebugLine();
+
     if (stateName === "walking") {
       el.sensorPill.classList.add("walking");
       el.sensorPillText.textContent = "Walking";
       el.sensorDot.style.display = "block";
+      if (el.permCard) el.permCard.style.display = "none";
+      if (dbg) dbg.textContent = "";
+
     } else if (stateName === "still") {
       el.sensorPill.classList.add("still");
       el.sensorPillText.textContent = "Standing still";
       el.sensorDot.style.display = "none";
+      if (el.permCard) el.permCard.style.display = "none";
+      if (dbg) dbg.textContent = "Sensor active — start walking to count steps.";
+
+    } else if (stateName === "no-data") {
+      el.sensorPill.classList.add("waiting");
+      el.sensorPillText.textContent = "No sensor data";
+      el.sensorDot.style.display = "none";
+      if (el.permCard) {
+        el.permCard.style.display = "block";
+        el.permCard.innerHTML = `
+          <i class="ti ti-alert-triangle" style="font-size:20px;color:var(--amber);display:block;margin-bottom:6px;"></i>
+          No motion data has been received from your device's sensors.
+          <ul style="text-align:left;margin:10px auto 0;max-width:340px;padding-left:18px;line-height:1.7;">
+            <li>Make sure the page is opened over <strong>HTTPS</strong> (or <code>http://localhost</code> if testing on the same device)</li>
+            <li>Check your browser's Site Settings → Motion sensors → Allow</li>
+            <li>Some desktop browsers/emulators have no accelerometer at all — try a real phone</li>
+          </ul>
+          <button class="perm-btn" onclick="location.reload()">Reload Page</button>`;
+      }
+
+    } else if (stateName === "insecure-context") {
+      el.sensorPill.classList.add("waiting");
+      el.sensorPillText.textContent = "HTTPS required";
+      el.sensorDot.style.display = "none";
+      if (el.permCard) {
+        el.permCard.style.display = "block";
+        el.permCard.innerHTML = `
+          <i class="ti ti-lock-open" style="font-size:20px;color:var(--rose);display:block;margin-bottom:6px;"></i>
+          Motion sensors are blocked because this page isn't loaded securely.
+          Browsers only allow step-counting sensors over <strong>HTTPS</strong>
+          (or <code>http://localhost</code> on this exact device).
+          <br><br>Open this app via its HTTPS address, or via <code>http://localhost:3007</code>
+          if you're testing on this same machine.`;
+      }
+
     } else if (stateName === "permission-needed") {
       el.sensorPill.classList.add("waiting");
       el.sensorPillText.textContent = "Tap to enable";
       el.sensorDot.style.display = "none";
-      if (el.permCard) el.permCard.style.display = "block";
+      if (el.permCard) {
+        el.permCard.style.display = "block";
+        el.permCard.innerHTML = `
+          <i class="ti ti-shoe" style="font-size:20px;color:var(--blue);display:block;margin-bottom:6px;"></i>
+          Motion sensor access is needed to count your steps.
+          <br><button class="perm-btn" id="permBtn">Enable Step Tracking</button>`;
+        document.getElementById("permBtn")?.addEventListener("click", _permBtnHandler);
+      }
+
     } else if (stateName === "denied") {
       el.sensorPill.classList.add("waiting");
       el.sensorPillText.textContent = "Permission denied";
       el.sensorDot.style.display = "none";
+      if (el.permCard) {
+        el.permCard.style.display = "block";
+        el.permCard.innerHTML = `
+          <i class="ti ti-lock" style="font-size:20px;color:var(--rose);display:block;margin-bottom:6px;"></i>
+          Motion permission was denied. On iOS: Settings → Safari →
+          Motion &amp; Orientation Access → On, then reload this page.`;
+      }
+
     } else if (stateName === "unsupported") {
       el.sensorPill.classList.add("waiting");
       el.sensorPillText.textContent = "Sensor unavailable";
       el.sensorDot.style.display = "none";
+      if (el.permCard) {
+        el.permCard.style.display = "block";
+        el.permCard.innerHTML = `
+          <i class="ti ti-device-mobile-off" style="font-size:20px;color:var(--muted);display:block;margin-bottom:6px;"></i>
+          This device or browser doesn't expose motion sensors. Try a
+          real phone with Chrome or Safari.`;
+      }
+
     } else {
       el.sensorPill.classList.add("waiting");
       el.sensorPillText.textContent = "Initialising…";
       el.sensorDot.style.display = "none";
+    }
+  }
+
+  let _permBtnHandler = null;
+  function setPermBtnHandler(fn) { _permBtnHandler = fn; }
+
+  function renderDebug(snapshot) {
+    const dbg = document.getElementById("sensorDebugLine");
+    if (!dbg || !snapshot) return;
+    if (snapshot.magnitude != null) {
+      dbg.textContent = `Sensor events: ${snapshot.eventCount} · live signal: ${snapshot.magnitude.toFixed(2)}`;
     }
   }
 
@@ -597,7 +752,6 @@ const UI = (function () {
   }
 
   function renderWeek(state) {
-    const dow = new Date().getDay();
     const labels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
     const weekStartDate = new Date(state.week.weekStart + "T00:00:00");
     const values = [];
@@ -630,7 +784,6 @@ const UI = (function () {
     if (el.wkCal) el.wkCal.textContent = Engine.calories(totalSteps).toLocaleString() + " kcal";
     if (el.wkBest) el.wkBest.textContent = best.steps > 0 ? labels[new Date(best.date + "T00:00:00").getDay()] + ` (${best.steps.toLocaleString()})` : "—";
 
-    // trend vs previous week
     const prevStart = new Date(weekStartDate); prevStart.setDate(prevStart.getDate() - 7);
     let prevTotal = 0;
     for (let i = 0; i < 7; i++) {
@@ -661,12 +814,13 @@ const UI = (function () {
     if (el.lGoals) el.lGoals.textContent = L.goalsCompleted;
   }
 
+  // NEW: renders Tabler <i> icons instead of emoji characters
   function renderAchievements(state) {
     if (!el.achGrid) return;
     el.achGrid.innerHTML = Engine.ACHIEVEMENTS.map(a => {
       const unlocked = state.achievements.includes(a.id);
       return `<div class="ach-badge ${unlocked ? "unlocked" : ""}" title="${a.name}">
-                <div class="ach-icon">${a.icon}</div>
+                <div class="ach-icon"><i class="ti ${a.icon}" aria-hidden="true"></i></div>
                 <div class="ach-name">${a.name}</div>
               </div>`;
     }).join("");
@@ -674,7 +828,7 @@ const UI = (function () {
 
   function renderChallenge(state) {
     const { ch, progress, pct, done } = Engine.challengeProgress(state);
-    if (el.chTitle) el.chTitle.innerHTML = `<i class="ti ti-target"></i> ${ch.label}`;
+    if (el.chTitle) el.chTitle.innerHTML = `<i class="ti ti-target" aria-hidden="true"></i> ${ch.label}`;
     if (el.chSub) el.chSub.textContent = "Resets every week — keep it up!";
     if (el.chBar) el.chBar.style.width = pct + "%";
     const progDisplay = ch.type === "distance" ? progress.toFixed(2) : Math.round(progress).toLocaleString();
@@ -686,7 +840,7 @@ const UI = (function () {
     if (!el.insightsList) return;
     const insights = Engine.weeklyInsights(state);
     el.insightsList.innerHTML = insights.map(i =>
-      `<div class="insight-item"><i class="ti ${i.icon}"></i><div class="insight-text">${i.text}</div></div>`
+      `<div class="insight-item"><i class="ti ${i.icon}" aria-hidden="true"></i><div class="insight-text">${i.text}</div></div>`
     ).join("");
   }
 
@@ -774,7 +928,7 @@ const UI = (function () {
     renderCalendar(state);
   }
 
-  return { renderAll, renderSensorState, renderDateSub, showToast, initCalendarNav, renderCalendar: () => {} };
+  return { renderAll, renderSensorState, renderDateSub, renderDebug, setPermBtnHandler, showToast, initCalendarNav, renderCalendar: () => {} };
 })();
 
 /* ============================================================
@@ -793,6 +947,7 @@ const UI = (function () {
   }
 
   Sensor.onStateChange = (s) => UI.renderSensorState(s);
+  Sensor.onDebug = (snapshot) => UI.renderDebug(snapshot);
 
   Sensor.onStep = (isBrisk) => {
     Store.addSteps(1, isBrisk);
@@ -800,24 +955,26 @@ const UI = (function () {
     UI.renderAll(st);
 
     const unlocked = Engine.checkAchievements(st);
-    unlocked.forEach(a => UI.showToast(`${a.icon} Achievement unlocked: ${a.name}`, "success"));
+    unlocked.forEach(a => UI.showToast(`Achievement unlocked: ${a.name}`, "success"));
     if (unlocked.length) UI.renderAll(st);
 
     scheduleSave();
   };
 
-  const permBtn = document.getElementById("permBtn");
-  if (permBtn) {
-    permBtn.addEventListener("click", async () => {
-      const granted = await Sensor.requestIOSPermission();
-      if (granted) {
-        document.getElementById("permCard").style.display = "none";
-        UI.showToast("Step tracking enabled.", "success");
-      } else {
-        UI.showToast("Motion permission was denied.", "error");
-      }
-    });
+  async function enableTracking() {
+    const granted = await Sensor.requestIOSPermission();
+    if (granted) {
+      UI.showToast("Step tracking enabled.", "success");
+    } else {
+      UI.showToast("Motion permission was denied.", "error");
+    }
   }
+  UI.setPermBtnHandler(enableTracking);
+
+  // Wire the button that already exists in the static HTML too
+  // (covers the initial permission-needed render before ensureDebugLine runs)
+  const staticPermBtn = document.getElementById("permBtn");
+  if (staticPermBtn) staticPermBtn.addEventListener("click", enableTracking);
 
   Sensor.start();
 
