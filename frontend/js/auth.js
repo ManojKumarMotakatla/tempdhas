@@ -128,6 +128,11 @@ async function handleGoogleAuth(name, email, googleId) {
         if (data.success) {
             localStorage.setItem("dhas_token", data.token);
             localStorage.setItem("dhas_user",  JSON.stringify(data.user));
+            try {
+                if (window.DHAS_CRYPTO) await DHAS_CRYPTO.init(window.API_BASE, data.token);
+            } catch (e) {
+                console.warn("[Auth] E2E init failed:", e);
+            }
             window.location.href = "dashboard.html";
         } else {
             showError(data.message || "Google sign-in failed.");
@@ -137,7 +142,6 @@ async function handleGoogleAuth(name, email, googleId) {
         showError("Cannot connect to server. Make sure the backend is running.");
     }
 }
-
 // ── UI HELPERS ───────────────────────────────────────────────────
 function showError(msg) {
     const el  = document.getElementById("errorMsg");
