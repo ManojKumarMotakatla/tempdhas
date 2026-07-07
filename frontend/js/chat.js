@@ -536,15 +536,39 @@
     fetchPresenceFallback();
 
     // Load message history
-    try {
-      const res  = await fetch(`${BASE}/chat/messages/${roomId}?limit=50`, { headers: authHeaders() });
-      const data = await res.json();
+// Load message history
+try {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 10000);
+  const res = await fetch(`${BASE}/chat/messages/${roomId}?limit=50`, {
+    headers: authHeaders(),
+    signal: controller.signal
+  });
+  clearTimeout(t);
 
-      if (!data.success) {
-        toast(data.message || "Failed to load messages.", "error");
-        if (elMessages) elMessages.innerHTML = "";
-        return;
-      }
+  const data = await res.json();
+
+  if (!data.success) {
+    toast(data.message || "Failed to load messages.", "error");
+    if (elMessages) elMessages.innerHTML = "";
+    return;
+  }
+
+  if (elMessages) elMessages.innerHTML = "";
+  renderedMsgIds.clear();
+
+  const msgs = data.data || [];
+  for (const msg of msgs) {
+    renderMessageNow(msg, false);
+  }
+
+  scrollToBottom();
+  emitSafe("mark_read", { room_id: roomId });
+
+} catch (e) {
+  console.error("[Chat] Load messages error:", e);
+  if (elMessages) elMessages.innerHTML = `<div class="loading-msgs">Could not load messages.</div>`;
+}
 
       if (elMessages) elMessages.innerHTML = "";
       renderedMsgIds.clear();
