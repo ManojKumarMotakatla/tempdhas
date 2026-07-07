@@ -20,28 +20,30 @@ const db = require("../config/db");
  * "no messages after disconnect", even before any live socket
  * notification reaches the client.
  */
+// chatAccess.js
 async function verifyRoomAccess(roomId, role, id) {
     const numericRoomId = parseInt(roomId, 10);
     if (!numericRoomId || isNaN(numericRoomId)) return null;
 
-    const [rows] = await db.promise().query(
-        `SELECT cr.id, cr.connection_id, cr.doctor_id, cr.patient_id, dpc.status
-         FROM chat_rooms cr
-         JOIN doctor_patient_connections dpc ON dpc.id = cr.connection_id
-         WHERE cr.id = ?`,
-        [numericRoomId]
-    );
-
-    if (rows.length === 0) return null;
-    const room = rows[0];
-
-    if (room.status !== "accepted") return null;
-    if (role === "doctor"  && room.doctor_id  !== id) return null;
-    if (role === "patient" && room.patient_id !== id) return null;
-
-    return room;
+    try {
+        const [rows] = await db.promise().query(
+            `SELECT cr.id, cr.connection_id, cr.doctor_id, cr.patient_id, dpc.status
+             FROM chat_rooms cr
+             JOIN doctor_patient_connections dpc ON dpc.id = cr.connection_id
+             WHERE cr.id = ?`,
+            [numericRoomId]
+        );
+        if (rows.length === 0) return null;
+        const room = rows[0];
+        if (room.status !== "accepted") return null;
+        if (role === "doctor"  && room.doctor_id  !== id) return null;
+        if (role === "patient" && room.patient_id !== id) return null;
+        return room;
+    } catch (err) {
+        console.error("verifyRoomAccess error:", err.message);
+        return null; // caller already handles null as 403 — never hangs
+    }
 }
-
 /**
  * Returns the chat_room id for an accepted connection, creating it
  * if it doesn't already exist. Call this right after a connection
