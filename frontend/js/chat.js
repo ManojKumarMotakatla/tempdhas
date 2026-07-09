@@ -535,46 +535,28 @@
     // hasn't even connected yet (emitSafe above just queued a warning).
     fetchPresenceFallback();
 
-    // Load message history
 // Load message history
-try {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), 10000);
-  const res = await fetch(`${BASE}/chat/messages/${roomId}?limit=50`, {
-    headers: authHeaders(),
-    signal: controller.signal
-  });
-  clearTimeout(t);
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(`${BASE}/chat/messages/${roomId}?limit=50`, {
+        headers: authHeaders(),
+        signal: controller.signal
+      });
+      clearTimeout(t);
 
-  const data = await res.json();
+      const data = await res.json();
 
-  if (!data.success) {
-    toast(data.message || "Failed to load messages.", "error");
-    if (elMessages) elMessages.innerHTML = "";
-    return;
-  }
-
-  if (elMessages) elMessages.innerHTML = "";
-  renderedMsgIds.clear();
-
-  const msgs = data.data || [];
-  for (const msg of msgs) {
-    renderMessageNow(msg, false);
-  }
-
-  scrollToBottom();
-  emitSafe("mark_read", { room_id: roomId });
-
-} catch (e) {
-  console.error("[Chat] Load messages error:", e);
-  if (elMessages) elMessages.innerHTML = `<div class="loading-msgs">Could not load messages.</div>`;
-}
+      if (!data.success) {
+        toast(data.message || "Failed to load messages.", "error");
+        if (elMessages) elMessages.innerHTML = "";
+        return;
+      }
 
       if (elMessages) elMessages.innerHTML = "";
       renderedMsgIds.clear();
 
       const msgs = data.data || [];
-      // Render all history messages synchronously
       for (const msg of msgs) {
         renderMessageNow(msg, false);
       }
@@ -586,9 +568,10 @@ try {
       console.error("[Chat] Load messages error:", e);
       if (elMessages) elMessages.innerHTML = `<div class="loading-msgs">Could not load messages.</div>`;
     }
-  }
+  }   // ← closes openRoom
 
   function closeRoom() {
+
     if (activeRoomId) emitSafe("leave_room");
     activeRoomId = null;
     activeContact = null;
