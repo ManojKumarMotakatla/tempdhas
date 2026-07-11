@@ -230,7 +230,10 @@ async function cacheFirst(request, cacheName) {
 async function networkFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   try {
-    const response = await fetch(request, { cache: "no-store" });
+    const response = await Promise.race([
+      fetch(request, { cache: "no-store" }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("sw-timeout")), 8000))
+    ]);
     if (response.ok) cache.put(request, response.clone());
     return response;
   } catch {
