@@ -24,7 +24,37 @@
 (function () {
   "use strict";
 
+  // ── TEMP DEBUG: surface JS errors visibly on-screen (no DevTools needed) ──
+  window.addEventListener("error", (e) => {
+    const msg = `JS ERROR: ${e.message} (${e.filename?.split("/").pop()}:${e.lineno})`;
+    console.error(msg, e.error);
+    const t = document.getElementById("chatToast");
+    if (t) {
+      t.className = "error";
+      t.textContent = msg;
+      t.style.display = "flex";
+      t.style.zIndex = "99999";
+    } else {
+      alert(msg);
+    }
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const msg = `PROMISE ERROR: ${e.reason?.message || e.reason}`;
+    console.error(msg, e.reason);
+    const t = document.getElementById("chatToast");
+    if (t) {
+      t.className = "error";
+      t.textContent = msg;
+      t.style.display = "flex";
+      t.style.zIndex = "99999";
+    } else {
+      alert(msg);
+    }
+  });
+  // ── END TEMP DEBUG ──
+
   // ── Identify caller ─────────────────────────────────────────
+  
   const doctorRaw    = localStorage.getItem("dhas_doctor");
   const patientRaw   = localStorage.getItem("dhas_user");
   const doctorToken  = localStorage.getItem("dhas_doctor_token");
