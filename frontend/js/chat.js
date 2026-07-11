@@ -1475,8 +1475,8 @@ function buildVoiceBubble(m) {
 
     const fileUrl = m.file_data || m.file_url || "";
     const src     = fileUrl.startsWith("http") ? fileUrl : BASE + fileUrl;
-    return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
-      <audio id="${audioId}" src="${src}" preload="none" style="display:none"></audio>
+return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
+  <audio id="${audioId}" data-src="${escapeAttr(src)}" preload="none" style="display:none"></audio>
       <button class="vb-play-btn" onclick="DHAS_CHAT.toggleVoicePlay('${audioId}','vb-${m.id}',this)" title="Play voice message">
         <i class="ti ti-player-play-filled"></i>
       </button>
@@ -1519,23 +1519,24 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
       }
     });
 
-    if (audio.paused) {
-      fixInfiniteDuration(audio);
-      btn.disabled = true; // avoid double-taps while we find out if play works
-      audio.play()
-        .then(() => {
-          btn.innerHTML = '<i class="ti ti-player-pause-filled"></i>';
-        })
-        .catch((err) => {
-          console.warn("[Chat] Voice play failed:", err);
-          toast("Cannot play voice message.", "error");
-          btn.innerHTML = '<i class="ti ti-player-play-filled"></i>'; // reset, don't get stuck
-        })
-        .finally(() => { btn.disabled = false; });
-    } else {
-      audio.pause();
-      btn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
-    }
+if (audio.paused) {
+  btn.disabled = true;
+  try {
+    await ensureVoiceLoaded(audioId);
+    fixInfiniteDuration(audio);
+    await audio.play();
+    btn.innerHTML = '<i class="ti ti-player-pause-filled"></i>';
+  } catch (err) {
+    console.warn("[Chat] Voice play failed:", err);
+    toast("Cannot play voice message.", "error");
+    btn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
+  } finally {
+    btn.disabled = false;
+  }
+} else {
+  audio.pause();
+  btn.innerHTML = '<i class="ti ti-player-play-filled"></i>';
+}
     
 
     audio.ontimeupdate = () => {
@@ -1557,7 +1558,33 @@ function toggleVoicePlay(audioId, bubbleId, btn) {
       audio.currentTime = 0;
     };
 }
+const _voiceBlobCache = {}; // rawSrc -> blob: URL, so we don't re-download on replay
 
+async function ensureVoiceLoaded(audioId) {
+  const audio = document.getElementById(audioId);
+  if (!audio) return null;
+  if (audio.dataset.loaded === "1") return audio;
+
+  const rawSrc = audio.dataset.src;
+  if (!rawSrc) return audio;
+
+  if (_voiceBlobCache[rawSrc]) {
+    audio.src = _voiceBlobCache[rawSrc];
+    audio.dataset.loaded = "1";
+    return audio;
+  }
+
+  const res = await fetch(rawSrc, { headers: authHeadersNoJSON() });
+  if (!res.ok) throw new Error("Failed to load voice message (" + res.status + ")");
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  _voiceBlobCache[rawSrc] = blobUrl;
+  audio.src = blobUrl;
+  audio.dataset.loaded = "1";
+  return audio;
+}
+
+  
   function seekVoice(event, audioId, bubbleId) {
     const audio  = document.getElementById(audioId);
     const waveEl = document.querySelector(`#${bubbleId} .vb-waveform`);
