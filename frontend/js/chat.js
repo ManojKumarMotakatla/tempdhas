@@ -1485,38 +1485,7 @@
     return bars;
   }
 
-function buildVoiceBubble(m) {
-    const dur   = m.content || "0:00";   // total duration, stored at record time
-    const seed  = m.id || Math.random();
-    const bars  = generateWaveBars(seed, 28);
-    const audioId = `voice-audio-${m.id}`;
 
-    if (m.is_encrypted) {
-      // Backward compatibility with old encrypted rows — can no longer
-      // be decrypted since the client-side crypto module was removed.
-      return `<div class="bubble-file">
-                <i class="ti ti-lock" style="font-size:24px;color:var(--muted)"></i>
-                <div>
-                  <div class="bf-name">${escapeHTML(m.file_name || "Voice message")}</div>
-                  <div class="bf-size">Old encrypted file — no longer playable</div>
-                </div>
-              </div>`;
-    }
-
-    const fileUrl = m.file_data || m.file_url || "";
-    const src     = fileUrl.startsWith("http") ? fileUrl : BASE + fileUrl;
-return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
-  <audio id="${audioId}" data-src="${escapeAttr(src)}" preload="none" style="display:none"></audio>
-      <button class="vb-play-btn" onclick="DHAS_CHAT.toggleVoicePlay('${audioId}','vb-${m.id}',this)" title="Play voice message">
-        <i class="ti ti-player-play-filled"></i>
-      </button>
-      <div class="vb-waveform" onclick="DHAS_CHAT.seekVoice(event,'${audioId}','vb-${m.id}')">
-        <div class="vb-progress" style="width:0%"></div>
-        <div class="vb-bars">${bars}</div>
-      </div>
-      <span class="vb-dur" id="vbd-${m.id}">${escapeHTML(dur)}</span>
-    </div>`;
-}
 
 // Works around a Chromium bug: MediaRecorder-produced webm/opus blobs often
 // report audio.duration === Infinity until the browser is forced to scan
@@ -1534,7 +1503,7 @@ function fixInfiniteDuration(audio) {
 }
 
 // Play/pause a voice bubble
-function toggleVoicePlay(audioId, bubbleId, btn) {
+async function toggleVoicePlay(audioId, bubbleId, btn) {
     const audio    = document.getElementById(audioId);
     const bubbleEl = document.getElementById(bubbleId);
     if (!audio) return;
@@ -1728,7 +1697,7 @@ async function ensureVoiceLoaded(audioId) {
     const fileUrl = m.file_data || m.file_url || "";
     const src     = fileUrl.startsWith("http") ? fileUrl : BASE + fileUrl;
     return `<div class="voice-bubble" id="vb-${m.id}" data-total-dur="${escapeAttr(dur)}">
-      <audio id="${audioId}" src="${src}" preload="none" style="display:none"></audio>
+      <audio id="${audioId}" data-src="${escapeAttr(src)}" preload="none" style="display:none"></audio>
       <button class="vb-play-btn" onclick="DHAS_CHAT.toggleVoicePlay('${audioId}','vb-${m.id}',this)" title="Play voice message">
         <i class="ti ti-player-play-filled"></i>
       </button>
