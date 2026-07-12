@@ -668,6 +668,12 @@ async function deleteReminder(id) {
     })).json();
     if (!data.success) { showMsg("Could not delete reminder. Please try again.", "error"); return; }
     allReminders = allReminders.filter(r => r.id !== id);
+    if (navigator.serviceWorker?.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: "DHAS_SET_REMINDERS",
+        reminders: allReminders
+      });
+    }
     if (_openEditId === id) closeInlineEdit();
     filterReminders(currentFilter, document.querySelector(".tab-btn.active"));
     updateStats(allReminders);
@@ -917,6 +923,12 @@ async function loadReminders() {
     if (data.success) {
       allReminders = data.data || [];
       console.log("REMINDERS:", allReminders);
+      if (navigator.serviceWorker?.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: "DHAS_SET_REMINDERS",
+          reminders: allReminders
+        });
+      }
       // Auto-delete reminders whose duration has fully expired
       await purgeSavedExpired();
     }
@@ -1003,10 +1015,13 @@ loadReminders();
                 const[aH,aM]=_to24(t.h,t.m,t.ampm);
                 if(isNaN(aH)||isNaN(aM))return;
                 if((hh*60+mm)!==(aH*60+aM))return;
-                const key=`${r.id}-${t.label}-${aH}-${aM}`;
-                if(_fired[key])return;
-                _fired[key]=true;
-                setTimeout(()=>delete _fired[key],5*60*1000);
+                
+                // Deduplicate across tabs using localStorage
+                const fireKey = `fired_${r.id}_${t.label}_${aH}_${aM}`;
+                const lastFired = localStorage.getItem(fireKey);
+                if (lastFired && (Date.now() - parseInt(lastFired, 10)) < 5 * 60 * 1000) return;
+                localStorage.setItem(fireKey, Date.now().toString());
+
                 _playSound(r.sound||"bell");
                 showMsg(`💊 Time for <strong>${r.medicine}</strong> — ${t.label}: ${t.display||""}`, "success", 30000);
                 if(Notification.permission==="granted"){
