@@ -274,9 +274,9 @@ function checkAlarms() {
             if (isNaN(alarmH) || isNaN(alarmM)) return;
             const nowMinutes   = hh * 60 + mm;
             const alarmMinutes = alarmH * 60 + alarmM;
-            // Widen to ±4 minutes to survive page load delays and slow ticks
-            let diff = Math.abs(nowMinutes - alarmMinutes);
-            if (diff > 720) diff = 1440 - diff; // Handle midnight wrap
+            // Widen to +4 minutes to survive page load delays and slow ticks (never fire early)
+            let diff = nowMinutes - alarmMinutes;
+            if (diff < 0) diff += 1440; // Handle midnight wrap
             if (diff > 4) return;
             
             // Deduplicate across tabs using localStorage
