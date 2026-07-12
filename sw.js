@@ -311,7 +311,11 @@ function _sw_checkAlarms() {
         (r.times || []).forEach(t => {
             const [aH, aM] = _sw_to24(t.h, t.m, t.ampm);
             if (isNaN(aH) || isNaN(aM)) return;
-            if ((hh * 60 + mm) !== (aH * 60 + aM)) return;
+            const nowMinutes   = hh * 60 + mm;
+            const alarmMinutes = aH * 60 + aM;
+            let diff = nowMinutes - alarmMinutes;
+            if (diff < 0) diff += 1440; // Handle midnight wrap
+            if (diff > 4) return;
             const key = `${r.id}-${t.label}-${aH}-${aM}`;
             if (_swFired[key] && (Date.now() - _swFired[key]) < 5 * 60 * 1000) return;
             _swFired[key] = Date.now();
