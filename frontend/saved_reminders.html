@@ -1012,9 +1012,13 @@ loadReminders();
         allReminders.forEach(r=>{
             if(!_shouldFire(r))return;
             (r.times||[]).forEach(t=>{
-                const[aH,aM]=_to24(t.h,t.m,t.ampm);
-                if(isNaN(aH)||isNaN(aM))return;
-                if((hh*60+mm)!==(aH*60+aM))return;
+                const [aH, aM] = _to24(t.h, t.m, t.ampm);
+                if (isNaN(aH) || isNaN(aM)) return;
+                const nowMinutes   = hh * 60 + mm;
+                const alarmMinutes = aH * 60 + aM;
+                let diff = nowMinutes - alarmMinutes;
+                if (diff < 0) diff += 1440; // Handle midnight wrap
+                if (diff > 4) return;
                 
                 // Deduplicate across tabs using localStorage
                 const fireKey = `fired_${r.id}_${t.label}_${aH}_${aM}`;
