@@ -245,7 +245,15 @@ async function enableDHASNotifications() {
 }
 
 // ── Alarm engine ──────────────────────────────────────────────
-let lastFiredKey = {};
+// Sync function for service worker
+function syncRemindersWithServiceWorker() {
+    if (navigator.serviceWorker?.controller) {
+        navigator.serviceWorker.controller.postMessage({
+            type: "DHAS_SET_REMINDERS",
+            reminders: remindersCache
+        });
+    }
+}
 
 function checkAlarms() {
     const reminders = getReminders();
@@ -267,11 +275,16 @@ function checkAlarms() {
             const nowMinutes   = hh * 60 + mm;
             const alarmMinutes = alarmH * 60 + alarmM;
             // Widen to ±4 minutes to survive page load delays and slow ticks
+            let diff = Math.abs(nowMinutes - alarmMinutes);
+            if (diff > 720) diff = 1440 - diff; // Handle midnight wrap
+            if (diff > 4) return;
             
-            const key = `${r.id}-${t.label}-${alarmH}-${alarmM}`;
-            if (lastFiredKey[key]) return;
-            lastFiredKey[key] = true;
-            setTimeout(() => delete lastFiredKey[key], 5 * 60 * 1000);
+            // Deduplicate across tabs using localStorage
+            const key = `fired_${r.id}_${t.label}_${alarmH}_${alarmM}`;
+            const lastFired = localStorage.getItem(key);
+            if (lastFired && (Date.now() - parseInt(lastFired, 10)) < 5 * 60 * 1000) return;
+            localStorage.setItem(key, Date.now().toString());
+
             triggerAlarm(r, t);
         });
     });
@@ -515,16 +528,25 @@ function updateNotifBanner(granted) {
 
 // ── Schedule UI ───────────────────────────────────────────────
 function renderScheduleUI() {
-    const sched = document.getElementById("scheduleType").value;
-    document.getElementById("dayPickerSection").style.display  = "none";
-    document.getElementById("monthDaySection").style.display   = "none";
-    if (sched === "monthly") {
-        document.getElementById("monthDaySection").style.display = "block";
+    const schedEl = document.getElementById("scheduleType");
+    if (!schedEl) return;
+    const sched = schedEl.value;
+    const dpSec = document.getElementById("dayPickerSection");
+    const mdSec = document.getElementById("monthDaySection");
+    if (dpSec) dpSec.style.display = "none";
+    if (mdSec) mdSec.style.display = "none";
+    if (sched === "monthly" && mdSec) {
+        mdSec.style.display = "block";
     } else if (["weekly","twice_week","three_week","custom"].includes(sched)) {
-        document.getElementById("dayPickerSection").style.display = "block";
-        renderDayPicker(sched);
+        if (dpSec) {
+            dpSec.style.display = "block";
+            renderDayPicker(sched);
+        }
     }
-    renderTimeSlots(document.getElementById("doseCount").value);
+    const doseEl = document.getElementById("doseCount");
+    if (doseEl) {
+        renderTimeSlots(doseEl.value);
+    }
 }
 
 function renderDayPicker(mode) {
@@ -554,6 +576,7 @@ function getSelectedDays() {
 
 function buildMonthDayOptions() {
     const sel = document.getElementById("monthDay");
+    if (!sel) return;
     for (let d = 1; d <= 28; d++) {
         const opt = document.createElement("option");
         opt.value = d; opt.textContent = d + ordinal(d) + " of every month";
@@ -563,7 +586,9 @@ function buildMonthDayOptions() {
 
 function renderTimeSlots(doseCount) {
     const slots = DOSE_DEFAULTS[doseCount] || DOSE_DEFAULTS["1"];
-    document.getElementById("timeSlots").innerHTML = slots.map((slot, i) => `
+    const tsEl = document.getElementById("timeSlots");
+    if (!tsEl) return;
+    tsEl.innerHTML = slots.map((slot, i) => `
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
           <label style="min-width:88px;font-size:0.85rem;font-weight:600;color:var(--text-muted,#666);flex-shrink:0;">${slot.label}</label>
           <select id="slot_h_${i}"  class="dhas-input" style="width:68px;padding:8px 4px;text-align:center;">${hourOptions(slot.h)}</select>
@@ -668,6 +693,7 @@ async function loadRemindersFromServer() {
         if (data.success) {
             remindersCache = (data.data || []).map(normalizeReminder);
             await purgeExpiredReminders();
+            syncRemindersWithServiceWorker();
         }
     } catch (err) { console.error("loadReminders error:", err); }
     displayReminders();
@@ -714,7 +740,10 @@ async function purgeExpiredReminders() {
             showPageMsg(`✅ "${r.medicine}" course completed — reminder removed.`, "success", 5000);
         } catch(e) { console.warn("purge failed", r.id, e); }
     }
-    if (toDelete.length) { console.log(`[DHAS] Purged ${toDelete.length} expired reminder(s).`); }
+    if (toDelete.length) {
+        syncRemindersWithServiceWorker();
+        console.log(`[DHAS] Purged ${toDelete.length} expired reminder(s).`);
+    }
 }
 
 // ── Save reminder ─────────────────────────────────────────────
@@ -821,6 +850,7 @@ window.deleteReminder = async function (id) {
             const data = await res.json();
             if (!data.success) { showPageMsg("Could not delete reminder. Please try again.", "error"); return; }
             remindersCache = remindersCache.filter(r => r.id !== id);
+            syncRemindersWithServiceWorker();
             displayReminders();
             showPageMsg("Reminder deleted.", "success");
         } catch (err) {
@@ -1275,27 +1305,35 @@ function goBack() { window.location.href = "dashboard.html"; }
 
 // ── Init ──────────────────────────────────────────────────────
 window.onload = async function () {
-    // ── 1. DOM setup FIRST — before any async calls that could pause execution ──
-    buildMonthDayOptions();
-    renderScheduleUI();
+    // Check if we are on a page that needs full reminder form/list setup
+    const isReminderPage = document.getElementById("medicine") || document.getElementById("reminderList");
 
-    const today = new Date().toISOString().split("T")[0];
-    const startDateEl = document.getElementById("startDate");
-    if (startDateEl) {
-        startDateEl.min   = today;
-        startDateEl.value = today;
-    }
+    if (isReminderPage) {
+        buildMonthDayOptions();
+        renderScheduleUI();
 
-    // Force-render time slots directly in case renderScheduleUI ran too early
-    const doseEl = document.getElementById("doseCount");
-    const tsEl   = document.getElementById("timeSlots");
-    if (doseEl && tsEl && tsEl.innerHTML.trim() === "") {
-        renderTimeSlots(doseEl.value || "1");
+        const today = new Date().toISOString().split("T")[0];
+        const startDateEl = document.getElementById("startDate");
+        if (startDateEl) {
+            startDateEl.min   = today;
+            startDateEl.value = today;
+        }
+
+        // Force-render time slots directly in case renderScheduleUI ran too early
+        const doseEl = document.getElementById("doseCount");
+        const tsEl   = document.getElementById("timeSlots");
+        if (doseEl && tsEl && tsEl.innerHTML.trim() === "") {
+            renderTimeSlots(doseEl.value || "1");
+        }
     }
 
     // ── 2. Async: SW + notifications (won't block DOM) ──
     registerSW();  // fire-and-forget — no await so SW install never blocks UI
-    requestNotifPermission().then(granted => updateNotifBanner(granted));
+    requestNotifPermission().then(granted => {
+        if (isReminderPage) {
+            updateNotifBanner(granted);
+        }
+    });
 
     // ── 3. Load data + start alarm ticker ──
     await loadRemindersFromServer();
