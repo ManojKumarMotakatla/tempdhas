@@ -454,10 +454,32 @@ async function load() {
 
     // Stats
     const specs    = new Set(allDoctors.map(d => d.speciality || 'General Physician'));
-    const patients = allDoctors.reduce((s, d) => s + (parseInt(d.patient_count) || 0), 0);
+    
+    let connectedCount = 0;
+    const storedUser = localStorage.getItem("dhas_user");
+    if (storedUser) {
+      try {
+        const user = JSON.parse(storedUser);
+        const userId = user.id || user.user_id || user.uid;
+        if (userId) {
+          const myRes = await fetch(`${BASE}/doctor/my-doctors/${userId}`, {
+            headers: {
+              "Authorization": "Bearer " + localStorage.getItem("dhas_token")
+            }
+          });
+          const myData = await myRes.json();
+          if (myData.success && myData.data) {
+            connectedCount = myData.data.filter(d => (d.status || "accepted") === "accepted").length;
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to fetch connected count:", err);
+      }
+    }
+
     document.getElementById('statTotal').textContent    = allDoctors.length;
     document.getElementById('statSpecs').textContent    = specs.size;
-    document.getElementById('statPatients').textContent = patients;
+    document.getElementById('statPatients').textContent = connectedCount;
 
     buildSpecTabs(allDoctors);
     renderDoctors(allDoctors);
