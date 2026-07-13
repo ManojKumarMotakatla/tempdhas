@@ -9,7 +9,7 @@ var TRANSLATIONS = {
   English: {
     dashboard:"Dashboard", symptoms:"Symptoms", reports:"Reports",
     diet:"Diet", remedies:"Remedies", reminders:"Reminders",
-    steps:"Steps", profile:"Profile", language:"Language", logout:"Logout",
+    steps:"Activity Tracker", profile:"Profile", language:"Language", logout:"Logout",
     checkSymptoms:"Check My Condition", selectSymptoms:"Select Your Symptoms",
     symptomsSubtitle:"Choose all symptoms you are currently experiencing",
     fever:"Fever", cold:"Cold / Runny Nose", headache:"Headache",
@@ -38,7 +38,7 @@ var TRANSLATIONS = {
   Hindi: {
     dashboard:"डैशबोर्ड", symptoms:"लक्षण", reports:"रिपोर्ट",
     diet:"आहार", remedies:"उपचार", reminders:"अनुस्मारक",
-    steps:"कदम", profile:"प्रोफ़ाइल", language:"भाषा", logout:"लॉग आउट",
+    steps:"गतिविधि ट्रैकर", profile:"प्रोफ़ाइल", language:"भाषा", logout:"लॉग आउट",
     checkSymptoms:"मेरी स्थिति जांचें", selectSymptoms:"अपने लक्षण चुनें",
     symptomsSubtitle:"वर्तमान में अनुभव किए जा रहे सभी लक्षण चुनें",
     fever:"बुखार", cold:"सर्दी / नाक बहना", headache:"सिरदर्द",
@@ -67,7 +67,7 @@ var TRANSLATIONS = {
   Telugu: {
     dashboard:"డాష్‌బోర్డ్", symptoms:"లక్షణాలు", reports:"నివేదికలు",
     diet:"ఆహారం", remedies:"చికిత్సలు", reminders:"రిమైండర్లు",
-    steps:"అడుగులు", profile:"ప్రొఫైల్", language:"భాష", logout:"లాగ్ అవుట్",
+    steps:"యాక్టివిటీ ట్రాకర్", profile:"ప్రొఫైల్", language:"భాష", logout:"లాగ్ అవుట్",
     checkSymptoms:"నా స్థితి తనిఖీ చేయండి", selectSymptoms:"మీ లక్షణాలు ఎంచుకోండి",
     symptomsSubtitle:"మీరు ప్రస్తుతం అనుభవిస్తున్న అన్ని లక్షణాలను ఎంచుకోండి",
     fever:"జ్వరం", cold:"జలుబు / ముక్కు కారడం", headache:"తలనొప్పి",
