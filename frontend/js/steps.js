@@ -233,19 +233,23 @@ const Sensor = (function () {
   // Smoothed magnitude of linear acceleration
   let smoothedMag = 0;
   const SMOOTH_ALPHA = 0.25;
-
-  // ── Peak/valley step state machine ──
+// ── Peak/valley step state machine ──
   let lastMag = 0;
   let rising = false;
   let waitingForValley = false;
   let peakVal = 0;
   let valleyVal = 0;
   let lastStepTime = 0;
+  let lastInterval = 0;
+  let candidateCount = 0;
 
-  const STEP_THRESHOLD    = 1.15;  // min peak-to-valley swing (m/s^2) to count as a real step
-  const MIN_STEP_INTERVAL = 300;   // ms - fastest plausible footfall
-  const MAX_STEP_INTERVAL = 2000;  // ms - gap this long resets the walking session
-
+  const STEP_THRESHOLD    = 3.2;   // min peak-to-valley swing (m/s^2) — real footstep, not hand jitter
+  const MAX_SWING         = 9.0;   // max plausible swing — anything bigger is a shake/drop, not a step
+  const MIN_STEP_INTERVAL = 280;   // ms - fastest plausible footfall (~215 steps/min ceiling)
+  const MAX_STEP_INTERVAL = 1800;  // ms - gap this long resets the walking session
+  const CADENCE_TOLERANCE = 0.45;  // consecutive step intervals must be within ±45% of each other
+  const CONFIRM_STEPS     = 2;     // require this many consistent steps in a row before counting starts
+ 
   let eventCount = 0, lastEventAt = 0, watchdogTimer = null;
   let stillTimer = null;
 
@@ -303,24 +307,47 @@ const Sensor = (function () {
 
       if (waitingForValley) {
         const swing = peakVal - valleyVal;
+
+        // Reject violent/unrealistic spikes (shaking, dropping, tapping the phone)
+        if (swing > MAX_SWING) {
+          waitingForValley = false;
+          peakVal = mag; valleyVal = mag;
+          candidateCount = 0;
+          lastInterval = 0;
+          return;
+        }
+
         if (swing >= STEP_THRESHOLD) {
           const interval = lastStepTime === 0 ? MIN_STEP_INTERVAL + 1 : now - lastStepTime;
+
           if (interval >= MIN_STEP_INTERVAL && interval <= MAX_STEP_INTERVAL) {
-            lastStepTime = now;
+            // Is this step's timing consistent with the last one (real walking rhythm)?
+            const consistent = lastInterval === 0 ||
+              Math.abs(interval - lastInterval) / lastInterval <= CADENCE_TOLERANCE;
+
+            lastInterval  = interval;
+            lastStepTime  = now;
             waitingForValley = false;
             peakVal = mag; valleyVal = mag;
-            const brisk = interval < 500;
-            onStateChange && onStateChange("walking");
-            onStep && onStep(brisk);
-            scheduleStillCheck();
+
+            candidateCount = consistent ? candidateCount + 1 : 1;
+
+            // Only count once we've seen a few steps at a consistent, walking-like rhythm
+            if (candidateCount >= CONFIRM_STEPS) {
+              const brisk = interval < 500;
+              onStateChange && onStateChange("walking");
+              onStep && onStep(brisk);
+              scheduleStillCheck();
+            }
           } else if (interval > MAX_STEP_INTERVAL) {
-            // Long gap — treat this as the start of a fresh cycle, don't count it
+            // Long gap — fresh walking session starting, don't count this one yet
             lastStepTime = now;
             waitingForValley = false;
             peakVal = mag; valleyVal = mag;
+            candidateCount = 0;
+            lastInterval = 0;
           }
-          // interval < MIN_STEP_INTERVAL → likely a double-bounce of the same
-          // footfall; ignore it but keep tracking (don't reset waitingForValley)
+          // interval < MIN_STEP_INTERVAL → double-bounce of same footfall, ignore but keep tracking
         }
       }
     }
