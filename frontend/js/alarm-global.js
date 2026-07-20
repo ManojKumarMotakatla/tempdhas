@@ -299,12 +299,12 @@
 
                 let diff = (hh * 60 + mm) - (alarmH * 60 + alarmM);
                 if (diff < 0) diff += 1440;
-                if (diff > 4) return; // only fire within 4-minute window
+                if (diff > 10) return; // fire within 10-minute window to catch late page loads
 
-                // Deduplicate across tabs with localStorage
+                // Deduplicate across tabs with localStorage (10-min window matches fire window)
                 const key = `fired_${r.id}_${t.label}_${alarmH}_${alarmM}`;
                 const lastFired = localStorage.getItem(key);
-                if (lastFired && (Date.now() - parseInt(lastFired, 10)) < 5 * 60 * 1000) return;
+                if (lastFired && (Date.now() - parseInt(lastFired, 10)) < 10 * 60 * 1000) return;
                 localStorage.setItem(key, Date.now().toString());
 
                 // Fire!
