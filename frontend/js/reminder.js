@@ -276,15 +276,15 @@ function checkAlarms() {
             if (isNaN(alarmH) || isNaN(alarmM)) return;
             const nowMinutes   = hh * 60 + mm;
             const alarmMinutes = alarmH * 60 + alarmM;
-            // Widen to +4 minutes to survive page load delays and slow ticks (never fire early)
+            // Widen to +10 minutes to survive page load delays and slow ticks (never fire early)
             let diff = nowMinutes - alarmMinutes;
             if (diff < 0) diff += 1440; // Handle midnight wrap
-            if (diff > 4) return;
+            if (diff > 10) return;
             
-            // Deduplicate across tabs using localStorage
+            // Deduplicate across tabs using localStorage (10-minute window matches fire window)
             const key = `fired_${r.id}_${t.label}_${alarmH}_${alarmM}`;
             const lastFired = localStorage.getItem(key);
-            if (lastFired && (Date.now() - parseInt(lastFired, 10)) < 5 * 60 * 1000) return;
+            if (lastFired && (Date.now() - parseInt(lastFired, 10)) < 10 * 60 * 1000) return;
             localStorage.setItem(key, Date.now().toString());
 
             triggerAlarm(r, t);
@@ -1306,7 +1306,8 @@ function displayReminders() {
 function goBack() { window.location.href = "dashboard.html"; }
 
 // ── Init ──────────────────────────────────────────────────────
-window.onload = async function () {
+// Use addEventListener instead of window.onload = ... so page scripts can't overwrite it
+window.addEventListener("load", async function () {
     // Check if we are on a page that needs full reminder form/list setup
     const isReminderPage = document.getElementById("medicine") || document.getElementById("reminderList");
 
@@ -1340,7 +1341,7 @@ window.onload = async function () {
     // ── 3. Load data + start alarm ticker ──
     await loadRemindersFromServer();
     startAlarmTicker();
-};
+});
 
 document.addEventListener("input",  updateReminderPreview);
 document.addEventListener("change", updateReminderPreview);
