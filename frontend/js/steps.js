@@ -1,37 +1,32 @@
 // ============================================================
-// DHAS — Activity Tracker (steps.js) — v3
+// DHAS — Activity Tracker (steps.js) — v4
 //
-// FIX (this version) — "zero steps ever counted":
-//   The step-detection math was fine. The real problem is almost
-//   always that devicemotion/Accelerometer events never arrive in
-//   the first place, and the old code had no way to tell you that.
-//   Root causes, most common first:
+// FIX (this version) — "counts steps while shaking/moving phone":
+//   Real walking has a hard physical ceiling on cadence (~3 steps/sec
+//   max, ~1.5-2.5 steps/sec typical). Hand shaking/repositioning easily
+//   produces swings that pass the old swing-threshold check AND happens
+//   to land inside the old cadence-consistency window, because shaking
+//   is often *rhythmic* too. The fix adds a peak-rate "shake detector":
+//   we track how many candidate peaks occur per second in a rolling
+//   window, and if that rate exceeds a real human's max stride rate,
+//   we treat it as noise/shake and impose a cooldown — no steps are
+//   registered until the motion drops back to a walking-like rate.
 //
-//   1. INSECURE CONTEXT — DeviceMotionEvent and the Generic Sensor
-//      API are ONLY delivered on https:// or http://localhost.
-//      Testing on a phone via http://192.168.x.x:3007 (a plain LAN
-//      IP) silently gets NO events at all — no error, no
-//      permission prompt, nothing. This is the #1 cause.
-//   2. iOS permission requested but not truly granted (result
-//      wasn't inspected carefully).
-//   3. No "watchdog" — old code couldn't distinguish "attached and
-//      just no steps yet" from "attached but broken, zero events
-//      ever arrived."
+//   Also tightened:
+//     - STEP_THRESHOLD raised (4.0, was 3.2) — filters small jitters
+//     - MAX_SWING lowered (7.5, was 9.0) — real footfall swing rarely
+//       exceeds this; shaking usually blows past it
+//     - MIN_STEP_INTERVAL raised (350ms, was 280ms) — caps cadence at
+//       ~171 steps/min, above any real walking pace
+//     - MAX_STEP_INTERVAL lowered (1200ms, was 1800ms) — resets the
+//       walking session faster after a pause
+//     - CADENCE_TOLERANCE tightened (±30%, was ±45%)
+//     - CONFIRM_STEPS raised to 3 (was 2) — needs 3 consistent,
+//       walking-paced intervals in a row before it starts counting
 //
-// FIXES ADDED:
-//   - isSecureContext() check up front → clear on-screen banner
-//     telling the user exactly what's wrong ("Open this over
-//     HTTPS, or via http://localhost on this same device").
-//   - A data-arrival watchdog: if the listener is attached but no
-//     devicemotion event fires within 8s, we surface a distinct
-//     "no-data" state instead of silently staying "still".
-//   - A tiny debug readout (raw event count + live magnitude) so
-//     you can immediately SEE whether the sensor is delivering
-//     data at all, without opening devtools.
-//   - Slightly hardened peak-detection thresholds for orientation
-//     independence (works in-hand or in-pocket).
-//   - Every emoji icon (🔥 👑 📅 🏅 etc.) replaced with Tabler
-//     icon classes (ti-*), matching the rest of the app.
+//   If you find real steps in your pocket are being missed after this,
+//   nudge STEP_THRESHOLD down toward ~3.4-3.6 first before touching
+//   anything else.
 // ============================================================
 
 (function () {
@@ -50,11 +45,6 @@ const BRISK_MIN_TARGET = 30;
 const STORAGE_KEY     = "dhas_activity_v1";
 const HISTORY_MAX_DAYS = 400;
 
-const MIN_STEP_MS   = 400;
-const MAX_STEP_MS   = 1200;
-const CONFIRM_STEPS = 2;
-const LOW_PASS_ALPHA = 0.2;
-const MIN_SWING = 2.2; // slightly more permissive than before — 2.5 was rejecting valid steps for phones in pockets
 const WATCHDOG_MS = 8000;
 
 function todayStr(d) {
@@ -212,7 +202,8 @@ const Store = (function () {
 
 /* ============================================================
    SENSOR — walk/step detection off devicemotion
-   Rewritten with: secure-context check, watchdog, debug counters.
+   v4: adds a peak-rate shake detector on top of the existing
+   gravity-isolation + peak/valley + cadence-consistency pipeline.
    ============================================================ */
 const Sensor = (function () {
   let onStep = null;
@@ -233,7 +224,8 @@ const Sensor = (function () {
   // Smoothed magnitude of linear acceleration
   let smoothedMag = 0;
   const SMOOTH_ALPHA = 0.25;
-// ── Peak/valley step state machine ──
+
+  // ── Peak/valley step state machine ──
   let lastMag = 0;
   let rising = false;
   let waitingForValley = false;
@@ -243,13 +235,27 @@ const Sensor = (function () {
   let lastInterval = 0;
   let candidateCount = 0;
 
-  const STEP_THRESHOLD    = 3.2;   // min peak-to-valley swing (m/s^2) — real footstep, not hand jitter
-  const MAX_SWING         = 9.0;   // max plausible swing — anything bigger is a shake/drop, not a step
-  const MIN_STEP_INTERVAL = 280;   // ms - fastest plausible footfall (~215 steps/min ceiling)
-  const MAX_STEP_INTERVAL = 1800;  // ms - gap this long resets the walking session
-  const CADENCE_TOLERANCE = 0.45;  // consecutive step intervals must be within ±45% of each other
-  const CONFIRM_STEPS     = 2;     // require this many consistent steps in a row before counting starts
- 
+  // Tuned thresholds — see file header for reasoning behind each change.
+  const STEP_THRESHOLD    = 4.0;   // min peak-to-valley swing (m/s^2) to even be a candidate
+  const MAX_SWING         = 7.5;   // max plausible swing for a real footstep
+  const MIN_STEP_INTERVAL = 350;   // ms — fastest plausible footfall (~171 steps/min ceiling)
+  const MAX_STEP_INTERVAL = 1200;  // ms — gap this long resets the walking session
+  const CADENCE_TOLERANCE = 0.30;  // consecutive step intervals must be within ±30% of each other
+  const CONFIRM_STEPS     = 3;     // require this many consistent steps in a row before counting starts
+
+  // ── Shake detector ──
+  // Tracks candidate-peak timestamps (any swing crossing STEP_THRESHOLD,
+  // whether or not it became a confirmed step) in a rolling window and
+  // rejects everything during a cooldown if the peak RATE is faster than
+  // a human can physically stride. This is what actually stops "shaking
+  // the phone in your hand" or "picking it up off the table" from
+  // registering as steps — those produce peak rates far above walking.
+  const SHAKE_WINDOW_MS   = 2000;  // rolling window to measure peak rate over
+  const SHAKE_MAX_RATE    = 3.3;   // peaks/sec above this = not walking (real max ~3/sec)
+  const SHAKE_COOLDOWN_MS = 1200;  // ignore steps for this long after a shake is detected
+  let peakTimestamps = [];
+  let shakeCooldownUntil = 0;
+
   let eventCount = 0, lastEventAt = 0, watchdogTimer = null;
   let stillTimer = null;
 
@@ -270,6 +276,28 @@ const Sensor = (function () {
   function scheduleStillCheck() {
     clearTimeout(stillTimer);
     stillTimer = setTimeout(() => onStateChange && onStateChange("still"), 2000);
+  }
+
+  // Records a candidate peak and checks whether the recent peak rate
+  // looks human. Returns true if we're currently in shake-cooldown
+  // (i.e. this and subsequent peaks should be ignored as steps).
+  function registerPeakAndCheckShake(now) {
+    peakTimestamps.push(now);
+    const cutoff = now - SHAKE_WINDOW_MS;
+    while (peakTimestamps.length && peakTimestamps[0] < cutoff) peakTimestamps.shift();
+
+    if (now < shakeCooldownUntil) return true;
+
+    // Rate = peaks in window / window length in seconds
+    const rate = peakTimestamps.length / (SHAKE_WINDOW_MS / 1000);
+    if (rate > SHAKE_MAX_RATE) {
+      shakeCooldownUntil = now + SHAKE_COOLDOWN_MS;
+      candidateCount = 0;
+      lastInterval = 0;
+      onStateChange && onStateChange("still");
+      return true;
+    }
+    return false;
   }
 
   // Core sample processor — fed by either the Generic Sensor API or devicemotion
@@ -318,6 +346,16 @@ const Sensor = (function () {
         }
 
         if (swing >= STEP_THRESHOLD) {
+          // Every swing that clears the threshold counts toward the
+          // shake-rate check, regardless of whether it ends up being a
+          // confirmed step below — this is what catches rapid shaking
+          // even before cadence/confirm logic would normally kick in.
+          if (registerPeakAndCheckShake(now)) {
+            waitingForValley = false;
+            peakVal = mag; valleyVal = mag;
+            return;
+          }
+
           const interval = lastStepTime === 0 ? MIN_STEP_INTERVAL + 1 : now - lastStepTime;
 
           if (interval >= MIN_STEP_INTERVAL && interval <= MAX_STEP_INTERVAL) {
@@ -332,7 +370,7 @@ const Sensor = (function () {
 
             candidateCount = consistent ? candidateCount + 1 : 1;
 
-            // Only count once we've seen a few steps at a consistent, walking-like rhythm
+            // Only count once we've seen several steps at a consistent, walking-like rhythm
             if (candidateCount >= CONFIRM_STEPS) {
               const brisk = interval < 500;
               onStateChange && onStateChange("walking");
@@ -506,7 +544,6 @@ const Engine = (function () {
     };
   }
 
-  // NEW: icon is now a Tabler icon class instead of an emoji character
   const ACHIEVEMENTS = [
     { id: "first_1000",  icon: "ti-shoe",           name: "First 1,000 Steps",   check: s => s.lifetime.steps >= 1000 },
     { id: "walk_5km",     icon: "ti-map-pin",        name: "Walk 5 km",           check: s => s.lifetime.distanceKm >= 5 },
@@ -892,7 +929,6 @@ const UI = (function () {
     if (el.lGoals) el.lGoals.textContent = L.goalsCompleted;
   }
 
-  // NEW: renders Tabler <i> icons instead of emoji characters
   function renderAchievements(state) {
     if (!el.achGrid) return;
     el.achGrid.innerHTML = Engine.ACHIEVEMENTS.map(a => {
