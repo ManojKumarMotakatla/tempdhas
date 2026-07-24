@@ -270,12 +270,15 @@ function syncRemindersWithServiceWorker() {
     }
 }
 
-function checkAlarms() {
+function checkAlarms(catchUp) {
     const reminders = getReminders();
     if (!reminders.length) return;
     const now = new Date();
     const dow = now.getDay(), dom = now.getDate();
     const hh  = now.getHours(), mm = now.getMinutes();
+    const nowTotalMinutes = hh * 60 + mm;
+    const today = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+
     if (navigator.serviceWorker?.controller) {
         navigator.serviceWorker.controller.postMessage({
             type:"CHECK_ALARMS", reminders, now:now.toISOString()
@@ -285,38 +288,41 @@ function checkAlarms() {
         if (!shouldFireToday(r, dow, dom)) return;
         (r.times || []).forEach(t => {
             const [alarmH, alarmM] = to24(t.h, t.m, t.ampm);
-            // Guard: skip if time parsing failed
             if (isNaN(alarmH) || isNaN(alarmM)) return;
-            const nowMinutes   = hh * 60 + mm;
-            const alarmMinutes = alarmH * 60 + alarmM;
-            // Widen to +10 minutes to survive page load delays and slow ticks (never fire early)
-            let diff = nowMinutes - alarmMinutes;
-            if (diff < 0) diff += 1440; // Handle midnight wrap
-            if (diff > 10) return;
-            
-            // Deduplicate across tabs using localStorage (10-minute window matches fire window)
-            const key = `fired_${r.id}_${t.label}_${alarmH}_${alarmM}`;
-            const lastFired = localStorage.getItem(key);
-            if (lastFired && (Date.now() - parseInt(lastFired, 10)) < 10 * 60 * 1000) return;
-            localStorage.setItem(key, Date.now().toString());
 
-            triggerAlarm(r, t);
+            const alarmTotalMinutes = alarmH * 60 + alarmM;
+            let diff = nowTotalMinutes - alarmTotalMinutes;
+            if (diff < 0) diff += 1440; // handle midnight wrap
+
+            // catchUp=true: allow up to 2 minutes past (for page-load catch-up)
+            // catchUp=false: only fire in the current clock minute (diff 0 or 1)
+            const maxDiff = catchUp ? 2 : 1;
+            if (diff > maxDiff) return;
+
+            // Deduplicate per alarm per calendar day — one fire per day per minute
+            const key = `dhas_fired_${r.id}_${t.label || "dose"}_${alarmH}_${alarmM}_${today}`;
+            if (localStorage.getItem(key)) return;
+            localStorage.setItem(key, "1");
+
+            console.log(`[DHAS Alarm] Firing: ${r.medicine} at ${t.display} (diff=${diff}min)`);
+            triggerAlarm(r, t, today);
         });
     });
 }
 
-function triggerAlarm(reminder, timeSlot) {
+function triggerAlarm(reminder, timeSlot, today) {
+    const dateKey = today || (() => { const n = new Date(); return `${n.getFullYear()}-${n.getMonth()}-${n.getDate()}`; })();
     playSound(reminder.sound || "bell");
     showAlarmCard(reminder, timeSlot);
     if (Notification.permission === "granted") {
-        navigator.serviceWorker.ready.then(reg =>
+        navigator.serviceWorker?.ready.then(reg =>
             reg.showNotification(`${reminder.medicine}`, {
-                body: `${timeSlot.label}: ${timeSlot.display}\n${reminder.scheduleLabel}`,
+                body: `${timeSlot.label}: ${timeSlot.display}\n${reminder.scheduleLabel || ""}`,
                 icon:"/favicon.ico", badge:"/favicon.ico",
                 vibrate:[300,100,300], requireInteraction:true,
-                tag:`dhas-${reminder.id}-${timeSlot.label}`
+                tag:`dhas-${reminder.id}-${timeSlot.label || "dose"}-${dateKey}`
             })
-        );
+        ).catch(() => {});
     }
 
     // After the last alarm of the day fires, schedule a post-alarm purge (5 min grace)
@@ -470,22 +476,21 @@ function to24(h, m, ampm) {
 }
 
 function startAlarmTicker() {
-    // Align ticker to fire at the START of every minute (xx:yy:00)
-    // This guarantees checkAlarms() always runs when hh:mm changes,
-    // so an exact-minute match never gets skipped.
-    function scheduleNextMinuteTick() {
+    // 1. Immediate catch-up check on page load (within 2 min window)
+    setTimeout(() => checkAlarms(true), 600);
+    // 2. Self-correcting per-minute ticker: uses recursive setTimeout
+    //    so every tick re-aligns to the real wall-clock minute boundary.
+    //    This means it NEVER drifts — fires within ~1 s of HH:MM:00.
+    function scheduleTick() {
         const now = new Date();
-        // ms remaining until the next whole minute + 200ms buffer
-        const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 200;
+        const msUntilNextMinute =
+            (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 100;
         setTimeout(() => {
-            checkAlarms();
-            // After the first aligned tick, repeat every 60 s exactly
-            setInterval(checkAlarms, 60 * 1000);
+            checkAlarms(false);
+            scheduleTick(); // re-align for next minute
         }, msUntilNextMinute);
     }
-    // Also do an immediate check in case we loaded right at alarm time
-    setTimeout(checkAlarms, 500);
-    scheduleNextMinuteTick();
+    scheduleTick();
 }
 
 // ── Constants ─────────────────────────────────────────────────
@@ -1357,6 +1362,10 @@ window.addEventListener("load", async function () {
     // ── 3. Load data + start alarm ticker ──
     await loadRemindersFromServer();
     startAlarmTicker();
+
+    // ── 4. Auto-reload reminders every 5 minutes ──
+    // Ensures newly saved alarms are picked up without a page refresh
+    setInterval(loadRemindersFromServer, 5 * 60 * 1000);
 });
 
 document.addEventListener("input",  updateReminderPreview);
