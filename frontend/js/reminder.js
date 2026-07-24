@@ -50,7 +50,8 @@ function normalizeReminder(r) {
 }
 
 // ── Bottom-left toast ─────────────────────────────────────────
-(function injectToastStyles() {
+// Inject styles immediately (safe — goes into <head>)
+(function injectReminderStyles() {
     if (document.getElementById("dhasToastStyle")) return;
     const style = document.createElement("style");
     style.id = "dhasToastStyle";
@@ -119,19 +120,31 @@ function normalizeReminder(r) {
         .alarm-dismiss { background:#fff; border:none; color:#1a56db; padding:6px 12px; border-radius:8px; cursor:pointer; font-weight:700; flex:1; display:flex; align-items:center; justify-content:center; gap:5px; font-size:0.78rem; font-family:'DM Sans',sans-serif; }
     `;
     document.head.appendChild(style);
-
-    const toast = document.createElement("div");
-    toast.id = "dhasPageToast";
-    toast.setAttribute("role", "status");
-    toast.setAttribute("aria-live", "polite");
-    document.body.appendChild(toast);
-
-    const alarmContainer = document.createElement("div");
-    alarmContainer.id = "dhasAlarmContainer";
-    alarmContainer.setAttribute("aria-live", "assertive");
-    alarmContainer.setAttribute("aria-label", "Medicine reminders");
-    document.body.appendChild(alarmContainer);
 })();
+
+// Inject DOM elements (toast + alarm container) only when <body> exists.
+// This is safe whether the script is in <head> or at end of <body>.
+function _injectReminderDOMElements() {
+    if (!document.getElementById("dhasPageToast")) {
+        const toast = document.createElement("div");
+        toast.id = "dhasPageToast";
+        toast.setAttribute("role", "status");
+        toast.setAttribute("aria-live", "polite");
+        document.body.appendChild(toast);
+    }
+    if (!document.getElementById("dhasAlarmContainer")) {
+        const alarmContainer = document.createElement("div");
+        alarmContainer.id = "dhasAlarmContainer";
+        alarmContainer.setAttribute("aria-live", "assertive");
+        alarmContainer.setAttribute("aria-label", "Medicine reminders");
+        document.body.appendChild(alarmContainer);
+    }
+}
+if (document.body) {
+    _injectReminderDOMElements();
+} else {
+    document.addEventListener("DOMContentLoaded", _injectReminderDOMElements);
+}
 
 let _msgTimer = null;
 function showPageMsg(text, type = "success", duration = 4500) {
@@ -373,6 +386,9 @@ function schedulePostAlarmPurge(reminder, timeSlot) {
 }
 
 function showAlarmCard(reminder, timeSlot) {
+    // Ensure the alarm container exists — it may not have been ready when the
+    // script first ran (e.g. reminder.js loaded in <head> on dashboard/chat).
+    _injectReminderDOMElements();
     const container = document.getElementById("dhasAlarmContainer");
     if (!container) return;
 
