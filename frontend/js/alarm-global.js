@@ -1,15 +1,26 @@
 /**
- * alarm-global.js — DHAS Global Alarm Engine
+ * alarm-global.js — DHAS Global Alarm Engine v2
  *
- * Lightweight script that runs the medicine-reminder alarm engine
- * on EVERY page (dashboard, chat, profile, steps, diet, …).
+ * Runs on EVERY page (dashboard, chat, symptom, diet, remedies, …).
+ * Fires alarm cards + sounds + browser notifications exactly when a
+ * scheduled medicine time arrives — regardless of which page the user
+ * is on.
  *
- * It injects the alarm-card UI, loads reminders from the server,
- * and fires alarm sounds + cards whenever a scheduled time arrives —
- * regardless of which page the user is currently on.
+ * Key design decisions:
+ *  • Self-correcting ticker: uses recursive setTimeout (not setInterval)
+ *    that re-aligns to the real wall-clock minute on every tick, so it
+ *    never drifts and always fires within ≤1 s of the alarm minute.
+ *  • 1-minute fire window: an alarm fires if the current minute matches
+ *    the alarm minute (diff 0–1 min). A localStorage key dedups across
+ *    tabs for the same calendar minute.
+ *  • Catch-up on page load: an immediate check after load fires alarms
+ *    that were set ≤2 minutes ago (handles slow page loads).
+ *  • Auto-reload: reminders are re-fetched from the server every 5 min
+ *    so newly saved alarms are picked up without a page refresh.
+ *  • Safe DOM injection: injects container only after <body> is ready.
  *
- * Pages that already include reminder.js (reminder.html) should NOT
- * include this script — reminder.js already contains this engine.
+ * Pages that load reminder.js (dashboard, chat, reminder.html) already
+ * set window.__DHAS_ALARM_ENGINE_LOADED__ = true so this script no-ops.
  */
 (function () {
     "use strict";
@@ -18,19 +29,21 @@
     if (window.__DHAS_ALARM_ENGINE_LOADED__) return;
     window.__DHAS_ALARM_ENGINE_LOADED__ = true;
 
-    // ── Inject tabler icons if not already present ────────────────
+    // ── Config ────────────────────────────────────────────────────
+    const API             = (window.API_BASE || "http://localhost:3007") + "/reminders";
+    const CATCH_UP_MINS   = 2;   // fire within this many minutes of a late page load
+    const RELOAD_INTERVAL = 5 * 60 * 1000;  // re-fetch reminders every 5 minutes
+
+    // ── Tabler icons ──────────────────────────────────────────────
     function ensureTablerIcons() {
         if (document.querySelector('link[href*="tabler-icons"]')) return;
         const link = document.createElement("link");
-        link.rel = "stylesheet";
+        link.rel  = "stylesheet";
         link.href = "https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css";
         document.head.appendChild(link);
     }
 
-    // ── Config ────────────────────────────────────────────────────
-    const API = (window.API_BASE || "http://localhost:3007") + "/reminders";
-
-    // ── Helpers ───────────────────────────────────────────────────
+    // ── User ID ───────────────────────────────────────────────────
     function getUserId() {
         const flatKeys = ["user_id", "userId", "uid", "dhas_user_id", "dhas_userId", "id", "user"];
         for (const store of [localStorage, sessionStorage]) {
@@ -46,7 +59,7 @@
                 if (!raw) continue;
                 try {
                     const obj = JSON.parse(raw);
-                    const id = obj.user_id || obj.userId || obj.uid || obj.id;
+                    const id  = obj.user_id || obj.userId || obj.uid || obj.id;
                     if (id) return String(id);
                 } catch { /* not JSON */ }
             }
@@ -54,6 +67,7 @@
         return null;
     }
 
+    // ── Normalize reminder ────────────────────────────────────────
     function normalizeReminder(r) {
         return {
             ...r,
@@ -73,72 +87,91 @@
         };
     }
 
-    // ── Inject UI styles ──────────────────────────────────────────
+    // ── UI styles ─────────────────────────────────────────────────
     function injectStyles() {
         if (document.getElementById("dhasGlobalAlarmStyle")) return;
         const style = document.createElement("style");
         style.id = "dhasGlobalAlarmStyle";
         style.textContent = `
             #dhasGlobalAlarmContainer {
-                position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+                position: fixed; top: 80px; left: 50%; transform: translateX(-50%);
                 z-index: 999999; display: flex; flex-direction: column;
-                gap: 10px; max-width: 360px; width: 92%;
+                gap: 10px; max-width: 380px; width: 94%;
                 pointer-events: none;
             }
             #dhasGlobalAlarmContainer > * { pointer-events: all; }
             .dhas-alarm-card {
-                background: linear-gradient(135deg, #1a56db, #0ea5e9); color: #fff;
-                border-radius: 16px; padding: 16px 20px;
-                box-shadow: 0 8px 32px rgba(0,0,0,0.28);
-                animation: dhasAlarmSlideIn 0.35s ease;
+                background: linear-gradient(135deg, #1a56db 0%, #0ea5e9 100%);
+                color: #fff; border-radius: 18px; padding: 18px 20px;
+                box-shadow: 0 12px 40px rgba(26,86,219,0.45);
+                animation: dhasAlarmSlideIn 0.38s cubic-bezier(.4,0,.2,1);
             }
             @keyframes dhasAlarmSlideIn {
-                from { opacity: 0; transform: translateY(-14px); }
-                to   { opacity: 1; transform: translateY(0); }
+                from { opacity: 0; transform: translateY(-20px) scale(0.97); }
+                to   { opacity: 1; transform: translateY(0)      scale(1); }
             }
+            .dhas-alarm-header {
+                display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+            }
+            .dhas-alarm-icon-wrap {
+                width: 36px; height: 36px; border-radius: 50%;
+                background: rgba(255,255,255,0.2); display: flex;
+                align-items: center; justify-content: center; flex-shrink: 0;
+            }
+            .dhas-alarm-icon-wrap i { font-size: 18px; }
             .dhas-alarm-title {
-                display: flex; align-items: center; gap: 8px;
-                font-size: 1rem; font-weight: 700; margin-bottom: 3px;
+                font-size: 0.78rem; font-weight: 700; opacity: 0.85;
+                text-transform: uppercase; letter-spacing: 0.05em;
                 font-family: 'DM Sans', sans-serif;
             }
-            .dhas-alarm-title i { font-size: 18px; }
-            .dhas-alarm-med {
-                font-size: 1rem; font-weight: 700;
-                display: flex; align-items: center; gap: 6px; margin-bottom: 3px;
+            .dhas-alarm-time-badge {
+                margin-left: auto; background: rgba(255,255,255,0.2);
+                border: 1px solid rgba(255,255,255,0.35);
+                border-radius: 6px; padding: 2px 8px;
+                font-size: 0.78rem; font-weight: 700;
                 font-family: 'DM Sans', sans-serif;
+            }
+            .dhas-alarm-med {
+                font-size: 1.05rem; font-weight: 700;
+                display: flex; align-items: center; gap: 7px;
+                margin-bottom: 4px; font-family: 'DM Sans', sans-serif;
             }
             .dhas-alarm-sub {
-                font-size: 0.82rem; opacity: 0.85; margin-bottom: 10px;
+                font-size: 0.82rem; opacity: 0.82; margin-bottom: 12px;
                 font-family: 'DM Sans', sans-serif;
             }
             .dhas-alarm-actions { display: flex; gap: 8px; }
             .dhas-alarm-snooze {
-                background: rgba(255,255,255,0.2);
+                background: rgba(255,255,255,0.18);
                 border: 1.5px solid rgba(255,255,255,0.4);
-                color: #fff; padding: 6px 12px; border-radius: 8px;
-                cursor: pointer; font-weight: 700; flex: 1; font-size: 0.78rem;
+                color: #fff; padding: 7px 14px; border-radius: 9px;
+                cursor: pointer; font-weight: 700; flex: 1; font-size: 0.8rem;
                 display: flex; align-items: center; justify-content: center;
                 gap: 5px; font-family: 'DM Sans', sans-serif;
+                transition: background 0.18s;
             }
+            .dhas-alarm-snooze:hover { background: rgba(255,255,255,0.28); }
             .dhas-alarm-dismiss {
                 background: #fff; border: none; color: #1a56db;
-                padding: 6px 12px; border-radius: 8px; cursor: pointer;
+                padding: 7px 14px; border-radius: 9px; cursor: pointer;
                 font-weight: 700; flex: 1; display: flex;
                 align-items: center; justify-content: center;
-                gap: 5px; font-size: 0.78rem; font-family: 'DM Sans', sans-serif;
+                gap: 5px; font-size: 0.8rem; font-family: 'DM Sans', sans-serif;
+                transition: background 0.18s;
             }
+            .dhas-alarm-dismiss:hover { background: #e8f0fe; }
         `;
         document.head.appendChild(style);
     }
 
-    // ── Inject alarm container ────────────────────────────────────
+    // ── Alarm container ───────────────────────────────────────────
     function injectContainer() {
         if (document.getElementById("dhasGlobalAlarmContainer")) return;
-        const container = document.createElement("div");
-        container.id = "dhasGlobalAlarmContainer";
-        container.setAttribute("aria-live", "assertive");
-        container.setAttribute("aria-label", "Medicine reminders");
-        document.body.appendChild(container);
+        const div = document.createElement("div");
+        div.id = "dhasGlobalAlarmContainer";
+        div.setAttribute("aria-live", "assertive");
+        div.setAttribute("aria-label", "Medicine reminders");
+        document.body.appendChild(div);
     }
 
     // ── Audio engine ──────────────────────────────────────────────
@@ -199,9 +232,8 @@
         }, 10 * 60 * 1000);
     }
 
-    // ── Alarm card UI ─────────────────────────────────────────────
+    // ── Alarm card ────────────────────────────────────────────────
     function showAlarmCard(reminder, timeSlot) {
-        // Ensure container exists (in case body wasn't ready earlier)
         injectContainer();
         const container = document.getElementById("dhasGlobalAlarmContainer");
         if (!container) return;
@@ -216,15 +248,18 @@
         card.className = "dhas-alarm-card";
         card.id = cardId;
         card.innerHTML = `
-            <div class="dhas-alarm-title">
-                <i class="ti ti-bell-ringing" aria-hidden="true"></i>
-                Medicine Time!
+            <div class="dhas-alarm-header">
+                <div class="dhas-alarm-icon-wrap">
+                    <i class="ti ti-bell-ringing" aria-hidden="true"></i>
+                </div>
+                <span class="dhas-alarm-title">Medicine Time!</span>
+                <span class="dhas-alarm-time-badge">${timeSlot.display || ""}</span>
             </div>
             <div class="dhas-alarm-med">
                 <i class="ti ti-pill" style="font-size:15px" aria-hidden="true"></i>
                 ${reminder.medicine}
             </div>
-            <div class="dhas-alarm-sub">${timeSlot.label}: ${timeSlot.display || "—"}</div>
+            <div class="dhas-alarm-sub">${timeSlot.label || "Dose"} • ${reminder.scheduleLabel || ""}</div>
             <div class="dhas-alarm-actions">
                 <button class="dhas-alarm-snooze" id="snoozeBtn_${cardId}">
                     <i class="ti ti-player-pause" style="font-size:13px" aria-hidden="true"></i>
@@ -242,8 +277,8 @@
             snoozeAlarm(rid, sound, card);
         });
 
-        // Auto-dismiss after 40 seconds
-        setTimeout(() => { if (card.parentNode) card.remove(); }, 40000);
+        // Auto-dismiss after 45 seconds
+        setTimeout(() => { if (card.parentNode) card.remove(); }, 45000);
     }
 
     // ── Schedule helpers ──────────────────────────────────────────
@@ -263,9 +298,9 @@
             case "daily":      return true;
             case "alternate": {
                 if (!r.altBase) return true;
-                const base = new Date(r.altBase);
+                const base  = new Date(r.altBase);
                 const today = new Date(); today.setHours(0, 0, 0, 0);
-                const bDay = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+                const bDay  = new Date(base.getFullYear(), base.getMonth(), base.getDate());
                 return Math.round((today - bDay) / 86400000) % 2 === 0;
             }
             case "weekly": case "twice_week": case "three_week": case "custom":
@@ -285,11 +320,18 @@
     // ── Alarm check ───────────────────────────────────────────────
     let remindersCache = [];
 
-    function checkAlarms() {
+    /**
+     * catchUp = true  → allow firing for alarms up to CATCH_UP_MINS minutes
+     *                   in the past (used on page load to catch missed alarms).
+     * catchUp = false → only fire if we are exactly in the current minute
+     *                   (used by the per-minute ticker).
+     */
+    function checkAlarms(catchUp) {
         if (!remindersCache.length) return;
         const now = new Date();
         const dow = now.getDay(), dom = now.getDate();
         const hh  = now.getHours(), mm = now.getMinutes();
+        const nowTotalMinutes = hh * 60 + mm;
 
         remindersCache.forEach(r => {
             if (!shouldFireToday(r, dow, dom)) return;
@@ -297,21 +339,29 @@
                 const [alarmH, alarmM] = to24(t.h, t.m, t.ampm);
                 if (isNaN(alarmH) || isNaN(alarmM)) return;
 
-                let diff = (hh * 60 + mm) - (alarmH * 60 + alarmM);
-                if (diff < 0) diff += 1440;
-                if (diff > 10) return; // fire within 10-minute window to catch late page loads
+                const alarmTotalMinutes = alarmH * 60 + alarmM;
+                let diff = nowTotalMinutes - alarmTotalMinutes;
+                if (diff < 0) diff += 1440; // handle midnight wrap
 
-                // Deduplicate across tabs with localStorage (10-min window matches fire window)
-                const key = `fired_${r.id}_${t.label}_${alarmH}_${alarmM}`;
-                const lastFired = localStorage.getItem(key);
-                if (lastFired && (Date.now() - parseInt(lastFired, 10)) < 10 * 60 * 1000) return;
-                localStorage.setItem(key, Date.now().toString());
+                // On page-load catch-up: fire if within CATCH_UP_MINS minutes past
+                // On normal tick: only fire in the current clock minute (diff 0 or 1)
+                const maxDiff = catchUp ? CATCH_UP_MINS : 1;
+                if (diff > maxDiff) return;
+
+                // Deduplicate: one fire per alarm per calendar day+hour+minute
+                // Key includes the date so the next day's alarm isn't suppressed
+                const today = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+                const key   = `dhas_fired_${r.id}_${t.label || "dose"}_${alarmH}_${alarmM}_${today}`;
+                if (localStorage.getItem(key)) return; // already fired today at this minute
+                localStorage.setItem(key, "1");
+
+                console.log(`[DHAS Alarm] Firing: ${r.medicine} at ${t.display} (diff=${diff}min)`);
 
                 // Fire!
                 playSound(r.sound || "bell");
                 showAlarmCard(r, t);
 
-                // Browser notification (if permission granted)
+                // Browser notification
                 if (Notification.permission === "granted") {
                     navigator.serviceWorker?.ready.then(reg =>
                         reg.showNotification(r.medicine, {
@@ -320,7 +370,7 @@
                             badge: "/favicon.ico",
                             vibrate: [300, 100, 300],
                             requireInteraction: true,
-                            tag: `dhas-${r.id}-${t.label}`
+                            tag: `dhas-${r.id}-${t.label}-${today}`
                         })
                     ).catch(() => {});
                 }
@@ -328,17 +378,28 @@
         });
     }
 
-    // ── Alarm ticker ──────────────────────────────────────────────
-    function startAlarmTicker() {
-        // Immediate check on load
-        setTimeout(checkAlarms, 500);
-        // Align to the start of every minute
+    // ── Self-correcting ticker ────────────────────────────────────
+    // Uses recursive setTimeout instead of setInterval so that each
+    // tick re-aligns itself to the real wall-clock minute boundary.
+    // This means the tick can never drift — it always fires within
+    // ~1 second of HH:MM:00 regardless of how long the tab has been open.
+    function scheduleTick() {
         const now = new Date();
-        const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 200;
+        // ms remaining until the start of the next full minute + 100ms buffer
+        const msUntilNextMinute =
+            (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 100;
+
         setTimeout(() => {
-            checkAlarms();
-            setInterval(checkAlarms, 60 * 1000);
+            checkAlarms(false); // precise per-minute check
+            scheduleTick();     // re-schedule for the next minute
         }, msUntilNextMinute);
+    }
+
+    function startAlarmTicker() {
+        // 1. Immediate catch-up check on page load (within 2 min window)
+        setTimeout(() => checkAlarms(true), 600);
+        // 2. Start the self-correcting per-minute ticker
+        scheduleTick();
     }
 
     // ── Service worker ────────────────────────────────────────────
@@ -347,7 +408,7 @@
         try {
             await navigator.serviceWorker.register("/sw.js");
             navigator.serviceWorker.addEventListener("message", e => {
-                if (e.data && e.data.type === "WAKE_CHECK") checkAlarms();
+                if (e.data && e.data.type === "WAKE_CHECK") checkAlarms(true);
             });
         } catch (err) { console.warn("[DHAS Alarm] SW failed:", err); }
     }
@@ -365,7 +426,6 @@
     async function loadReminders() {
         const uid = getUserId();
         if (!uid) return;
-        // Ensure getAuthHeaders is available (requires config.js to be loaded first)
         const getHeaders = window.getAuthHeaders || (() => ({}));
         try {
             const res  = await fetch(`${API}/get/${uid}`, { headers: getHeaders() });
@@ -373,6 +433,7 @@
             if (data.success) {
                 remindersCache = (data.data || []).map(normalizeReminder);
                 syncWithSW();
+                console.log(`[DHAS Alarm] Loaded ${remindersCache.length} reminder(s).`);
             }
         } catch (err) {
             console.warn("[DHAS Alarm] Could not load reminders:", err);
@@ -388,6 +449,9 @@
         registerSW();
         await loadReminders();
         startAlarmTicker();
+
+        // Auto-reload reminders every 5 minutes so new alarms are picked up
+        setInterval(loadReminders, RELOAD_INTERVAL);
     }
 
     // Wait for DOM to be ready
