@@ -29,7 +29,7 @@ const _swUrlVersion = (() => {
   }
 })();
 
-const CACHE_VERSION = _swUrlVersion ? `dhas-${_swUrlVersion}` : "dhas-v15";
+const CACHE_VERSION = _swUrlVersion ? `dhas-${_swUrlVersion}` : "dhas-v16";
 const API_CACHE     = "dhas-api-v8";
 const FONT_CACHE    = "dhas-fonts-v8";
 const CDN_CACHE     = "dhas-cdn-v8";
