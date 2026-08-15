@@ -660,7 +660,9 @@ function doseLabel(n){ return {"1":"Once daily","2":"Twice daily","3":"Three tim
 
 // ── Reminder preview ──────────────────────────────────────────
 function updateReminderPreview() {
-    const medicine = document.getElementById("medicine").value.trim();
+    const medicineEl = document.getElementById("medicine");
+    if (!medicineEl) return;                        // not on the reminder form page
+    const medicine = medicineEl.value.trim();
     const preview  = document.getElementById("reminderPreview");
     if (!medicine) { preview.style.display = "none"; return; }
 
