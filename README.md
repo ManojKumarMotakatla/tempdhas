@@ -55,7 +55,7 @@ The interface can be switched between English, Hindi, and Telugu, with translati
 - Designed to be deployed on Render, with automatic cache-busting tied to the deployment's git commit hash
 - CORS is configured to allow local development origins as well as production domains
 
-## Project Structure
+
 ## Project Structure
 
 ```
