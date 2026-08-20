@@ -227,4 +227,56 @@ This `.env` file should never be committed to version control — make sure it i
 npm start
 ```
 
-By default the server runs on port 3007. Once running, open:
+By default the server runs on port 3007. Once running, open:http://localhost:3007
+
+### Testing on a phone over the local network
+
+To test the app on a mobile device connected to the same Wi-Fi network:
+
+1. Find your machine's local IP address:
+   - Windows: `ipconfig`
+   - macOS/Linux: `ifconfig`
+2. On your phone's browser, open `http://<your-local-ip>:3007`
+
+Note that step tracking relies on device motion sensors, which browsers only expose in a secure context — this means it will not work when accessed over a plain HTTP LAN address, only over HTTPS or on `localhost` itself.
+
+## Database Schema Notes
+
+The schema separates patients (`users` table) and doctors (`doctors` table) into distinct tables with different profile fields, connected through a `doctor_patient_connections` table that tracks connection status (pending, accepted, rejected). Chat functionality builds on top of this: a `chat_rooms` row is created automatically the moment a connection is accepted, and `chat_messages` stores all message types, including metadata for shared symptom checks and shared reports.
+
+Column naming is deliberately kept consistent across the codebase — for example, the reports table uses `filename` (not `file_name`) everywhere, since earlier naming inconsistencies caused bugs where the frontend and backend disagreed on field names.
+
+## Security Considerations
+
+- Passwords are hashed with bcrypt before storage; plaintext passwords are never persisted.
+- JWTs are used for stateless authentication, with middleware that distinguishes between patient-issued and doctor-issued tokens.
+- Chat messages support end-to-end encryption using ECDH key exchange and AES-256-GCM; private keys are generated and stored only in the browser and are never transmitted to the server.
+- File uploads for chat attachments are restricted by MIME type and size, and are only ever served back through an authenticated route that re-verifies the requester still has access to that specific chat room.
+- SQL errors are never returned to the client directly — they are logged server-side and replaced with a generic user-facing message.
+
+## Known Limitations
+
+- Step detection, while filtered against shaking and false positives, is inherently approximate given it relies on consumer-grade accelerometer data.
+- The symptom checker is rule-based rather than model-driven, and is intended for general guidance only, not diagnosis.
+- Google Fit integration requires the user to authenticate with Google and grant fitness data access; without it, step counts fall back entirely to the in-browser accelerometer.
+
+## Deployment
+
+The project is set up to deploy directly to Render:
+
+1. Push the repository to your Git provider.
+2. Create a new Web Service on Render and connect the repository.
+3. Set the build command to `npm install`.
+4. Set the start command to `npm start`.
+5. Add all variables from the Environment Variables section to Render's environment settings.
+6. Provision a MySQL database (Render or an external host) and point the `DB_*` variables at it.
+
+Render automatically injects a git commit SHA which the app uses to version its Service Worker cache, so every new deployment invalidates old cached assets without any manual cache-busting steps.
+
+## License
+
+ISC
+
+## Disclaimer
+
+DHAS is intended for informational and educational purposes only. It is not a substitute for professional medical advice, diagnosis, or treatment. Users experiencing a medical emergency or serious symptoms should consult a qualified healthcare provider immediately.
