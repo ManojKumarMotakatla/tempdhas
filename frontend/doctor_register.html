@@ -34,6 +34,7 @@
     .toggle-eye svg{width:18px;height:18px;pointer-events:none;stroke:currentColor;fill:none;stroke-width:2;}
     .btn-register{width:100%;padding:13px;border:none;border-radius:12px;font-family:'DM Sans',sans-serif;font-weight:700;font-size:.95rem;cursor:pointer;background:linear-gradient(135deg,#059669,#00c9b1);color:#fff;box-shadow:0 4px 20px rgba(5,150,105,.35);transition:all .22s;}
     .btn-register:hover{transform:translateY(-1px);}
+    .btn-register:disabled{opacity:.55;cursor:not-allowed;transform:none;}
     .alert{padding:11px 14px;border-radius:10px;font-size:.84rem;font-weight:600;margin-bottom:14px;display:none;}
     .alert.danger{background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;}
     .alert.success{background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;}
@@ -46,7 +47,6 @@
     .footer-note{text-align:center;font-size:.83rem;color:var(--muted);padding:0 28px 24px;}
     .footer-note a{color:#059669;font-weight:600;text-decoration:none;}
 
-    /* password strength */
     .strength-bar-wrap{display:flex;gap:4px;margin-bottom:6px;}
     .strength-segment{flex:1;height:4px;border-radius:2px;background:var(--border);transition:background .3s;}
     .strength-label{font-size:.72rem;font-weight:600;color:var(--muted);margin-bottom:14px;}
@@ -54,6 +54,18 @@
     .req-list li{display:flex;align-items:center;gap:6px;color:var(--muted);margin-bottom:3px;transition:color .2s;}
     .req-list li::before{content:"✗";font-weight:700;color:#e74c3c;min-width:14px;}
     .req-list li.ok{color:#27ae60;}.req-list li.ok::before{content:"✓";color:#27ae60;}
+
+    /* ── Email OTP verification ── */
+    .otp-panel{margin:4px 0 16px;padding:14px;border:1.5px dashed var(--border);border-radius:12px;background:rgba(5,150,105,.06);}
+    body.dark .otp-panel{background:rgba(5,150,105,.1);border-color:#1a2d4a;}
+    .otp-row{display:flex;gap:8px;align-items:stretch;}
+    .otp-row .dhas-input{margin-bottom:0;flex:1;}
+    .btn-otp{padding:11px 14px;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.82rem;cursor:pointer;white-space:nowrap;background:#064e3b;color:#fff;transition:opacity .2s;}
+    .btn-otp:disabled{opacity:.55;cursor:not-allowed;}
+    .btn-otp.secondary{background:transparent;border:1.5px solid #059669;color:#059669;}
+    .otp-hint{font-size:.72rem;color:var(--muted);margin-top:8px;line-height:1.4;}
+    .otp-verified{font-size:.8rem;font-weight:600;color:#27ae60;margin-top:8px;display:none;}
+    .otp-verified.show{display:block;}
   </style>
 </head>
 <body>
@@ -74,7 +86,20 @@
       <input type="text" id="name" class="dhas-input" placeholder="Dr. Your Name">
 
       <label class="dhas-label">Email Address</label>
-      <input type="email" id="email" class="dhas-input" placeholder="doctor@hospital.com">
+      <input type="email" id="email" class="dhas-input" placeholder="doctor@hospital.com" oninput="onEmailChange()">
+
+      <!-- Email OTP verification (required before Create Account) -->
+      <div class="otp-panel" id="otpPanel">
+        <label class="dhas-label">Email verification</label>
+        <div class="otp-row">
+          <button type="button" class="btn-otp" id="btnSendOtp" onclick="sendOtp()">Send OTP</button>
+          <input type="text" id="otpCode" class="dhas-input" placeholder="6-digit code" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
+          <button type="button" class="btn-otp secondary" id="btnConfirmOtp" onclick="confirmOtp()">Verify</button>
+        </div>
+        <div class="otp-hint" id="otpHint">We will email a 6-digit code. Verify it before creating your account.</div>
+        <div class="otp-verified" id="otpVerified">✓ Email verified — you can create your account</div>
+      </div>
+
       <label class="dhas-label">Speciality</label>
 <select id="speciality" class="dhas-input">
   <option value="">Select Speciality</option>
@@ -118,7 +143,7 @@
         <li id="req-sym">One symbol (!@#$%^&amp;*)</li>
       </ul>
 
-      <button onclick="register()" class="btn-register">Create Doctor Account</button>
+      <button onclick="register()" class="btn-register" id="btnCreateDoctor" disabled>Create Doctor Account</button>
 
       <div class="or-divider">OR continue with Google</div>
       <div class="google-btn-wrap">
@@ -139,6 +164,110 @@
   </div>
 </div>
 <script>
+// ── EMAIL OTP VERIFICATION ────────────────────────────────────
+let emailVerified = false;
+let otpCooldownUntil = 0;
+
+function setOtpVerified(ok) {
+  emailVerified = !!ok;
+  const badge = document.getElementById("otpVerified");
+  if (badge) badge.classList.toggle("show", emailVerified);
+  const btn = document.getElementById("btnCreateDoctor");
+  if (btn) btn.disabled = !emailVerified;
+}
+
+function onEmailChange() {
+  if (emailVerified) {
+    emailVerified = false;
+    setOtpVerified(false);
+    document.getElementById("otpCode").value = "";
+    document.getElementById("otpHint").textContent = "We will email a 6-digit code. Verify it before creating your account.";
+  }
+}
+
+async function sendOtp() {
+  const email = document.getElementById("email").value.trim();
+  const name  = document.getElementById("name").value.trim();
+  const btn   = document.getElementById("btnSendOtp");
+  const hint  = document.getElementById("otpHint");
+
+  document.getElementById("errMsg").style.display = "none";
+
+  if (!email) { showErr("Enter your email address first."); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+    showErr("Please enter a valid email address.");
+    return;
+  }
+  if (Date.now() < otpCooldownUntil) {
+    const secs = Math.ceil((otpCooldownUntil - Date.now()) / 1000);
+    showErr("Please wait " + secs + "s before requesting another code.");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    const res = await fetch(window.API_BASE + "/email-otp/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, name })
+    }).then(r => r.json());
+
+    if (res.success) {
+      const ok = document.getElementById("okMsg");
+      ok.textContent = res.message || "OTP sent. Check your inbox.";
+      ok.style.display = "block";
+      hint.textContent = "Code sent to " + email + ". Enter it below and click Verify.";
+      otpCooldownUntil = Date.now() + 60000;
+      setOtpVerified(false);
+      document.getElementById("otpCode").focus();
+    } else {
+      showErr(res.message || "Failed to send OTP.");
+    }
+  } catch (e) {
+    showErr("Cannot connect to server.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Send OTP";
+  }
+}
+
+async function confirmOtp() {
+  const email = document.getElementById("email").value.trim();
+  const otp   = document.getElementById("otpCode").value.trim();
+  const btn   = document.getElementById("btnConfirmOtp");
+
+  document.getElementById("errMsg").style.display = "none";
+
+  if (!email) { showErr("Enter your email address first."); return; }
+  if (!/^\d{6}$/.test(otp)) { showErr("Enter the 6-digit code from your email."); return; }
+
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    const res = await fetch(window.API_BASE + "/email-otp/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, otp })
+    }).then(r => r.json());
+
+    if (res.success) {
+      setOtpVerified(true);
+      const ok = document.getElementById("okMsg");
+      ok.textContent = res.message || "Email verified!";
+      ok.style.display = "block";
+    } else {
+      setOtpVerified(false);
+      showErr(res.message || "Verification failed.");
+    }
+  } catch (e) {
+    showErr("Cannot connect to server.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Verify";
+  }
+}
+
 const RULES = {
   len:   v => v.length >= 6,
   upper: v => /[A-Z]/.test(v),
@@ -193,17 +322,22 @@ async function register() {
   if (!name)  { showErr("Full name is required."); return; }
   if (!email) { showErr("Email address is required."); return; }
   if (!speciality) {
-  showErr("Please select your speciality.");
-  return;
-}
+    showErr("Please select your speciality.");
+    return;
+  }
   if (!password || !isPasswordStrong(password)) {
     showErr("Password must be at least 6 characters with uppercase, lowercase, number, and symbol.");
     return;
   }
 
+  if (!emailVerified) {
+    showErr("Please verify your email with the OTP code before creating an account. Click Send OTP, then Verify.");
+    return;
+  }
+
   const res  = await fetch(window.API_BASE + "/doctor/register", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, email, password,speciality})
+    body: JSON.stringify({ name, email, password, speciality })
   }).then(r => r.json()).catch(() => ({ success: false, message: "Cannot connect to server." }));
 
   if (res.success) {

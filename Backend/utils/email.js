@@ -10,7 +10,7 @@
 //   FRONTEND_URL        = https://tempdhas.onrender.com
 // ============================================================
 
-async function sendPasswordResetEmail({ toEmail, toName, resetLink, role }) {
+async function sendBrevoEmail({ toEmail, toName, subject, htmlContent }) {
   const apiKey = process.env.BREVO_API_KEY;
   const senderEmail = process.env.BREVO_SENDER_EMAIL;
   const senderName = process.env.BREVO_SENDER_NAME || "DHAS Health";
@@ -20,6 +20,40 @@ async function sendPasswordResetEmail({ toEmail, toName, resetLink, role }) {
     return { success: false, error: "Email service not configured" };
   }
 
+  const body = {
+    sender: { name: senderName, email: senderEmail },
+    to: [{ email: toEmail, name: toName || "User" }],
+    subject,
+    htmlContent
+  };
+
+  try {
+    const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "api-key": apiKey
+      },
+      body: JSON.stringify(body)
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      console.error("Brevo API error:", res.status, JSON.stringify(data));
+      return { success: false, error: data.message || `HTTP ${res.status}` };
+    }
+
+    console.log("Brevo email sent OK — messageId:", data.messageId || "(none)");
+    return { success: true, messageId: data.messageId };
+  } catch (err) {
+    console.error("Brevo fetch error:", err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+async function sendPasswordResetEmail({ toEmail, toName, resetLink, role }) {
   const htmlContent = `
     <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;padding:24px;background:#f8fafc;">
       <div style="background:#ffffff;border-radius:12px;padding:32px;border:1px solid #e2e8f0;">
@@ -54,37 +88,58 @@ async function sendPasswordResetEmail({ toEmail, toName, resetLink, role }) {
     </div>
   `;
 
-  const body = {
-    sender: { name: senderName, email: senderEmail },
-    to: [{ email: toEmail, name: toName || "User" }],
+  return sendBrevoEmail({
+    toEmail,
+    toName,
     subject: "Reset your DHAS password",
     htmlContent
-  };
-
-  try {
-    const res = await fetch("https://api.brevo.com/v3/smtp/email", {
-      method: "POST",
-      headers: {
-        "accept": "application/json",
-        "content-type": "application/json",
-        "api-key": apiKey
-      },
-      body: JSON.stringify(body)
-    });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      console.error("Brevo API error:", res.status, JSON.stringify(data));
-      return { success: false, error: data.message || `HTTP ${res.status}` };
-    }
-
-    console.log("Brevo email sent OK — messageId:", data.messageId || "(none)");
-    return { success: true, messageId: data.messageId };
-  } catch (err) {
-    console.error("Brevo fetch error:", err.message);
-    return { success: false, error: err.message };
-  }
+  });
 }
 
-module.exports = { sendPasswordResetEmail };
+/**
+ * Send a 6-digit email OTP for registration verification.
+ * Used for both patient and doctor signup before account creation.
+ */
+async function sendOtpEmail({ toEmail, toName, otp }) {
+  const htmlContent = `
+    <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;padding:24px;background:#f8fafc;">
+      <div style="background:#ffffff;border-radius:12px;padding:32px;border:1px solid #e2e8f0;">
+        <h2 style="color:#0f766e;margin:0 0 12px;font-size:22px;">Verify your email</h2>
+        <p style="color:#334155;font-size:15px;line-height:1.5;margin:0 0 8px;">
+          Hi ${toName || "there"},
+        </p>
+        <p style="color:#334155;font-size:15px;line-height:1.5;margin:0 0 24px;">
+          Use the code below to verify <strong>${toEmail}</strong> and complete your DHAS registration.
+        </p>
+        <p style="margin:0 0 28px;text-align:center;">
+          <span style="display:inline-block;background:#f0fdfa;border:2px dashed #0f766e;
+                       color:#0f766e;font-size:28px;font-weight:700;letter-spacing:8px;
+                       padding:16px 28px;border-radius:10px;font-family:monospace;">
+            ${otp}
+          </span>
+        </p>
+        <p style="color:#64748b;font-size:13px;line-height:1.5;margin:0 0 8px;">
+          This code expires in <strong>10 minutes</strong>. Do not share it with anyone.
+        </p>
+        <p style="color:#64748b;font-size:13px;line-height:1.5;margin:0;">
+          If you did not request this, you can safely ignore this email.
+        </p>
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+        <p style="color:#94a3b8;font-size:12px;margin:0;">
+          DHAS — Digital Health Assistant System<br>
+          <a href="${process.env.FRONTEND_URL || "https://tempdhas.onrender.com"}"
+             style="color:#0f766e;text-decoration:none;">${process.env.FRONTEND_URL || "https://tempdhas.onrender.com"}</a>
+        </p>
+      </div>
+    </div>
+  `;
+
+  return sendBrevoEmail({
+    toEmail,
+    toName,
+    subject: "Your DHAS verification code",
+    htmlContent
+  });
+}
+
+module.exports = { sendPasswordResetEmail, sendOtpEmail };

@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -67,6 +66,7 @@
     .btn-dhas{width:100%;padding:13px;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.95rem;cursor:pointer;transition:all .2s;display:inline-block;text-align:center;}
     .btn-dhas.primary{background:linear-gradient(135deg,var(--blue),#4f8ef9);color:#fff;box-shadow:0 4px 16px rgba(42,108,246,.3);}
     .btn-dhas.primary:hover{transform:translateY(-1px);}
+    .btn-dhas.primary:disabled{opacity:.55;cursor:not-allowed;transform:none;}
     .dhas-alert{padding:11px 14px;border-radius:10px;font-size:.84rem;font-weight:600;margin-bottom:12px;}
     .dhas-alert.danger{background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;}
     .dhas-alert.success{background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;}
@@ -101,6 +101,18 @@
     .strength-label{font-size:.75rem;margin-top:4px;font-weight:600;}
     p{color:var(--muted);}
     a{color:var(--blue);font-weight:700;text-decoration:none;}
+
+    /* ── Email OTP verification ── */
+    .otp-panel{margin:14px 0 16px;padding:14px;border:1.5px dashed var(--border);border-radius:12px;background:rgba(42,108,246,.04);}
+    html.dark .otp-panel,body.dark .otp-panel{background:rgba(42,108,246,.08);border-color:#1e2e58;}
+    .otp-row{display:flex;gap:8px;align-items:stretch;}
+    .otp-row .dhas-input{margin-bottom:0;flex:1;}
+    .btn-otp{padding:11px 14px;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.82rem;cursor:pointer;white-space:nowrap;background:var(--navy-mid);color:#fff;transition:opacity .2s;}
+    .btn-otp:disabled{opacity:.55;cursor:not-allowed;}
+    .btn-otp.secondary{background:transparent;border:1.5px solid var(--blue);color:var(--blue);}
+    .otp-hint{font-size:.72rem;color:var(--muted);margin-top:8px;line-height:1.4;}
+    .otp-verified{font-size:.8rem;font-weight:600;color:#27ae60;margin-top:8px;display:none;}
+    .otp-verified.show{display:block;}
   </style>
 </head>
 <body>
@@ -133,6 +145,18 @@
            oninput="validateEmail(this.value)" onblur="validateEmailStrict(this.value)">
     <div class="email-status" id="emailStatus"></div>
 
+    <!-- Email OTP verification (required before Create Account) -->
+    <div class="otp-panel" id="otpPanel">
+      <label class="dhas-label">Email verification</label>
+      <div class="otp-row">
+        <button type="button" class="btn-otp" id="btnSendOtp" onclick="sendOtp()">Send OTP</button>
+        <input type="text" id="otpCode" class="dhas-input" placeholder="6-digit code" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
+        <button type="button" class="btn-otp secondary" id="btnConfirmOtp" onclick="confirmOtp()">Verify</button>
+      </div>
+      <div class="otp-hint" id="otpHint">We will email a 6-digit code. Verify it before creating your account.</div>
+      <div class="otp-verified" id="otpVerified">✓ Email verified — you can create your account</div>
+    </div>
+
     <label class="dhas-label">Password</label>
     <div class="pw-wrap">
       <input type="password" id="password" class="dhas-input"
@@ -162,7 +186,7 @@
       <li id="req-sym">At least one symbol (!@#$%^&amp;* …)</li>
     </ul>
 
-    <button class="btn-dhas primary" onclick="submitRegister()">Create Account</button>
+    <button class="btn-dhas primary" id="btnCreateAccount" onclick="submitRegister()" disabled>Create Account</button>
 
     <p style="text-align:center;margin-top:16px;font-size:.84rem;">
       Already have an account?
@@ -192,20 +216,8 @@
 <script>
 // ═══════════════════════════════════════════════════════════════
 // COMPREHENSIVE EMAIL VALIDATION — DHAS register.html
-//
-// Layers of checks (in order):
-//   1. Structural regex  — must look like x@y.z
-//   2. Local-part rules  — no leading/trailing dots, no ".."
-//   3. Domain label rules — each label ≥ 2 chars, no hyphens at
-//      start/end, no purely numeric labels
-//   4. TLD allowlist     — only real/common TLDs accepted
-//   5. Known-bad domains — disposable / obviously fake domains
-//   6. Typo detection    — Levenshtein distance against known good
-//      domains, surface a "Did you mean?" suggestion
 // ═══════════════════════════════════════════════════════════════
 
-// ── 1. KNOWN GOOD DOMAINS (canonical spellings) ───────────────
-// We check the user's domain against this list for typo detection.
 const KNOWN_DOMAINS = [
   "gmail.com","yahoo.com","yahoo.in","yahoo.co.in","hotmail.com",
   "outlook.com","outlook.in","live.com","icloud.com","me.com",
@@ -215,7 +227,6 @@ const KNOWN_DOMAINS = [
   "tutanota.com","fastmail.com","pm.me","hey.com",
 ];
 
-// ── 2. DISPOSABLE / OBVIOUSLY FAKE DOMAINS ───────────────────
 const BAD_DOMAINS = new Set([
   "mailinator.com","guerrillamail.com","throwam.com","trashmail.com",
   "fakeinbox.com","tempmail.com","yopmail.com","maildrop.cc",
@@ -224,28 +235,20 @@ const BAD_DOMAINS = new Set([
   "mailnull.com","spamgourmet.com","throwam.com","spamhereplease.com",
 ]);
 
-// ── 3. TLD ALLOWLIST ─────────────────────────────────────────
-// Only TLDs that real email addresses actually use.
-// This prevents things like user@gmail.xyz or user@example.qwerty
 const VALID_TLDS = new Set([
-  // Generic
   "com","net","org","edu","gov","mil","int","info","biz","name","pro",
   "mobi","tel","travel","jobs","museum","coop","aero","cat","post",
   "xyz","online","site","web","app","io","ai","co","me","tv","cc","ws",
   "cloud","tech","store","shop","blog","media","news","agency","studio",
   "design","dev","page","email","mail","digital","solutions","services",
   "global","world","network","systems","group","team","live","show",
-  // Country codes — India-specific + major ones
   "in","us","uk","gb","au","ca","de","fr","jp","cn","br","ru","za",
   "sg","nz","ie","nl","se","no","dk","fi","es","it","pt","pl","ch",
   "at","be","cz","gr","hu","ro","tr","il","ae","sa","pk","bd","lk",
   "np","my","id","ph","th","vn","hk","tw","kr",
-  // Common second-level under country codes (treat as TLD after dot)
   "co","ac","gov","edu","net","org","nic",
 ]);
 
-// ── 4. LEVENSHTEIN DISTANCE ───────────────────────────────────
-// Used to find the closest known-good domain to what the user typed.
 function levenshtein(a, b) {
   const m = a.length, n = b.length;
   const dp = Array.from({length: m + 1}, (_, i) =>
@@ -261,42 +264,29 @@ function levenshtein(a, b) {
   return dp[m][n];
 }
 
-// Find the closest known domain within a given edit-distance threshold.
-// Returns { suggestion: "gmail.com", distance: 1 } or null.
 function findClosestDomain(typed) {
   const lower = typed.toLowerCase();
-  // Exact match — no suggestion needed
   if (KNOWN_DOMAINS.includes(lower)) return null;
-
   let best = null;
   let bestDist = Infinity;
   for (const known of KNOWN_DOMAINS) {
     const d = levenshtein(lower, known);
     if (d < bestDist) { bestDist = d; best = known; }
   }
-  // Only suggest if the edit distance is small relative to the domain length
-  // e.g. "gmial.com" → distance 2 from "gmail.com" → suggest
-  // but "yahoo123.net" → distance too large → no suggestion
   const threshold = Math.max(2, Math.floor(lower.length * 0.35));
   return bestDist <= threshold ? { suggestion: best, distance: bestDist } : null;
 }
 
-// ── 5. STRUCTURAL CHECKS ─────────────────────────────────────
-// Returns an object: { valid: bool, error: string|null, warn: string|null }
 function deepValidateEmail(email) {
   const raw = email.trim();
-
-  // Empty
   if (!raw) return { valid: false, error: null, warn: null };
 
-  // Must contain exactly one @
   const atCount = (raw.match(/@/g) || []).length;
   if (atCount === 0) return { valid: false, error: "Missing @ symbol — email must look like name@gmail.com" };
   if (atCount > 1)  return { valid: false, error: "Email must have only one @ symbol" };
 
   const [local, domainPart] = raw.split("@");
 
-  // ── Local part checks ──
   if (!local || local.length === 0)
     return { valid: false, error: "Missing username before @ (e.g. yourname@gmail.com)" };
   if (local.length > 64)
@@ -305,11 +295,9 @@ function deepValidateEmail(email) {
     return { valid: false, error: "Username cannot start or end with a dot" };
   if (local.includes(".."))
     return { valid: false, error: "Username cannot have two dots in a row" };
-  // Only allow safe characters in local part
   if (!/^[a-zA-Z0-9._%+\-]+$/.test(local))
     return { valid: false, error: "Username contains invalid characters — only letters, numbers, dots, hyphens, and underscores are allowed" };
 
-  // ── Domain part checks ──
   if (!domainPart || domainPart.length === 0)
     return { valid: false, error: "Missing domain after @ — email must look like name@gmail.com" };
   if (!domainPart.includes("."))
@@ -322,15 +310,11 @@ function deepValidateEmail(email) {
   const labels = domainPart.toLowerCase().split(".");
   const tld    = labels[labels.length - 1];
 
-  // TLD must be letters only (no numbers, no hyphens)
   if (!/^[a-z]+$/.test(tld))
     return { valid: false, error: `".${tld}" is not a valid domain extension — did you mean .com, .in, or .org?` };
-
-  // TLD must be in allowlist
   if (!VALID_TLDS.has(tld))
     return { valid: false, error: `".${tld}" is not a recognised email domain extension — common ones are .com, .in, .net, .org` };
 
-  // Each non-TLD label must be ≥ 2 chars and contain at least one letter
   for (let i = 0; i < labels.length - 1; i++) {
     const lbl = labels[i];
     if (lbl.length < 2)
@@ -343,16 +327,11 @@ function deepValidateEmail(email) {
       return { valid: false, error: `Domain label "${lbl}" contains invalid characters` };
   }
 
-  // Disposable / fake domain check
   if (BAD_DOMAINS.has(domainPart.toLowerCase()))
     return { valid: false, error: "Disposable/temporary email addresses are not allowed — please use your real email" };
 
-  // ── Typo / suggestion check ──
   const closest = findClosestDomain(domainPart);
   if (closest) {
-    // Distance 1 = very likely a typo (e.g. "gmaill.com"), show as error
-    // Distance 2 = probable typo (e.g. "gmial.com"), show as error
-    // Distance 3 = possible typo, show as warning
     const isLikelyTypo = closest.distance <= 2;
     const suggestion   = `${local}@${closest.suggestion}`;
     if (isLikelyTypo) {
@@ -374,20 +353,15 @@ function deepValidateEmail(email) {
   return { valid: true, warn: null };
 }
 
-// ── 6. UI WIRING ─────────────────────────────────────────────
 let _lastValidationResult = null;
 
 function setEmailUI(state, message) {
-  // state: 'valid' | 'invalid' | 'warn' | 'reset'
   const input = document.getElementById("email");
   const status = document.getElementById("emailStatus");
-
   input.classList.remove("input-valid", "input-invalid", "input-warn");
   status.className = "email-status";
   status.innerHTML = "";
-
   if (state === "reset") return;
-
   if (state === "valid") {
     input.classList.add("input-valid");
     status.className = "email-status valid";
@@ -403,24 +377,17 @@ function setEmailUI(state, message) {
   }
 }
 
-// Called on every keystroke — lenient (only flag obvious errors)
-// REPLACE the existing validateEmail() function with this:
 function validateEmail(email) {
   const raw = email.trim();
   if (!raw) { setEmailUI("reset"); _lastValidationResult = null; return; }
-
   const result = deepValidateEmail(raw);
   _lastValidationResult = result;
-
   const hasAt  = raw.includes("@");
   const hasDot = hasAt && raw.split("@")[1]?.includes(".");
-
   if (result.error) {
-    // Show error immediately if user has typed past the @ and dot
     if (hasDot || result.typo) {
       setEmailUI("invalid", result.error);
     } else if (hasAt && result.error.includes("@")) {
-      // e.g. missing domain — wait until dot is typed
       setEmailUI("reset");
     } else if (hasAt) {
       setEmailUI("invalid", result.error);
@@ -436,14 +403,11 @@ function validateEmail(email) {
   }
 }
 
-// Called on blur — strict (show all errors)
 function validateEmailStrict(email) {
   const raw = email.trim();
   if (!raw) { setEmailUI("reset"); return; }
-
   const result = deepValidateEmail(raw);
   _lastValidationResult = result;
-
   if (result.error) {
     setEmailUI("invalid", result.error);
   } else if (result.typo) {
@@ -455,14 +419,11 @@ function validateEmailStrict(email) {
   }
 }
 
-// Returns true only if the email is genuinely valid (no errors, no typo)
 function isEmailAcceptable(email) {
   const r = deepValidateEmail(email.trim());
-  // Accept if valid even with a non-blocking warning (user knows their own domain)
   return r.valid === true && !r.typo;
 }
 
-// ── PASSWORD TOGGLE ───────────────────────────────────────────
 function togglePw(fieldId, iconId) {
   const field  = document.getElementById(fieldId);
   const icon   = document.getElementById(iconId);
@@ -481,7 +442,6 @@ function togglePw(fieldId, iconId) {
               -1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>`;
 }
 
-// ── PASSWORD STRENGTH ─────────────────────────────────────────
 const RULES = {
   len:   v => v.length >= 6,
   upper: v => /[A-Z]/.test(v),
@@ -511,7 +471,129 @@ function isPasswordValid(val) {
   return Object.values(RULES).every(fn => fn(val));
 }
 
+// ── EMAIL OTP VERIFICATION ────────────────────────────────────
+let emailVerified = false;
+let otpCooldownUntil = 0;
 
+function setOtpVerified(ok) {
+  emailVerified = !!ok;
+  const badge = document.getElementById("otpVerified");
+  if (badge) badge.classList.toggle("show", emailVerified);
+  const createBtn = document.getElementById("btnCreateAccount") || document.querySelector(".btn-dhas.primary");
+  if (createBtn) createBtn.disabled = !emailVerified;
+}
+
+function resetOtpState() {
+  setOtpVerified(false);
+  const code = document.getElementById("otpCode");
+  if (code) code.value = "";
+  const hint = document.getElementById("otpHint");
+  if (hint) hint.textContent = "We will email a 6-digit code. Verify it before creating your account.";
+}
+
+(function wireEmailChange() {
+  const emailEl = document.getElementById("email");
+  if (!emailEl) return;
+  emailEl.addEventListener("input", () => {
+    if (emailVerified) resetOtpState();
+  });
+})();
+
+async function sendOtp() {
+  const email = document.getElementById("email").value.trim();
+  const name  = document.getElementById("name").value.trim();
+  const errBox = document.getElementById("errorMsg");
+  const okBox  = document.getElementById("successMsg");
+  const btn    = document.getElementById("btnSendOtp");
+  const hint   = document.getElementById("otpHint");
+
+  const showErr = msg => {
+    errBox.innerHTML = msg; errBox.style.display = "block";
+    okBox.style.display = "none";
+  };
+  errBox.style.display = "none";
+
+  if (!email) { showErr("Enter your email address first."); return; }
+  const emailResult = deepValidateEmail(email);
+  if (!emailResult.valid || emailResult.typo) {
+    validateEmailStrict(email);
+    showErr(emailResult.error || "Please enter a valid email before requesting an OTP.");
+    return;
+  }
+
+  if (Date.now() < otpCooldownUntil) {
+    const secs = Math.ceil((otpCooldownUntil - Date.now()) / 1000);
+    showErr("Please wait " + secs + "s before requesting another code.");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    const res = await fetch(window.API_BASE + "/email-otp/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, name })
+    }).then(r => r.json());
+
+    if (res.success) {
+      okBox.textContent = res.message || "OTP sent. Check your inbox.";
+      okBox.style.display = "block";
+      hint.textContent = "Code sent to " + email + ". Enter it below and click Verify.";
+      otpCooldownUntil = Date.now() + 60000;
+      setOtpVerified(false);
+      document.getElementById("otpCode").focus();
+    } else {
+      showErr(res.message || "Failed to send OTP.");
+    }
+  } catch (e) {
+    showErr("Cannot connect to server. Make sure the backend is running.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Send OTP";
+  }
+}
+
+async function confirmOtp() {
+  const email = document.getElementById("email").value.trim();
+  const otp   = document.getElementById("otpCode").value.trim();
+  const errBox = document.getElementById("errorMsg");
+  const okBox  = document.getElementById("successMsg");
+  const btn    = document.getElementById("btnConfirmOtp");
+
+  const showErr = msg => {
+    errBox.innerHTML = msg; errBox.style.display = "block";
+    okBox.style.display = "none";
+  };
+  errBox.style.display = "none";
+
+  if (!email) { showErr("Enter your email address first."); return; }
+  if (!/^\d{6}$/.test(otp)) { showErr("Enter the 6-digit code from your email."); return; }
+
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    const res = await fetch(window.API_BASE + "/email-otp/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, otp })
+    }).then(r => r.json());
+
+    if (res.success) {
+      setOtpVerified(true);
+      okBox.textContent = res.message || "Email verified!";
+      okBox.style.display = "block";
+    } else {
+      setOtpVerified(false);
+      showErr(res.message || "Verification failed.");
+    }
+  } catch (e) {
+    showErr("Cannot connect to server.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Verify";
+  }
+}
 
 // ── FORM SUBMIT ───────────────────────────────────────────────
 async function submitRegister() {
@@ -528,18 +610,13 @@ async function submitRegister() {
   };
   errBox.style.display = "none";
 
-  // Name
   if (!name) { showErr("Full name is required."); return; }
-
-  // Email — run strict validation
   if (!email) { showErr("Email address is required."); return; }
 
   const emailResult = deepValidateEmail(email);
 
   if (!emailResult.valid || emailResult.typo) {
-    // Always run strict UI feedback first
     validateEmailStrict(email);
-
     if (emailResult.error) {
       showErr(emailResult.error);
     } else if (emailResult.typo) {
@@ -551,23 +628,30 @@ async function submitRegister() {
     return;
   }
 
-  // Non-blocking warning (e.g. unusual but valid domain) — allow through
-  // but re-run strict UI so the user sees the warning was noted
   validateEmailStrict(email);
 
-  // Password
   if (!isPasswordValid(password)) {
     showErr("Password must be at least 6 characters and include an uppercase letter, a lowercase letter, a number, and a symbol.");
     return;
   }
 
-handleRegister(name, email, password);   // plain password
+  if (!emailVerified) {
+    showErr("Please verify your email with the OTP code before creating an account. Click <strong>Send OTP</strong>, then <strong>Verify</strong>.");
+    return;
+  }
+
+  handleRegister(name, email, password);
 }
-// ── GOOGLE AUTH CALLBACK ──────────────────────────────────────
+
 function handleCredentialResponse(response) {
   const payload = JSON.parse(atob(response.credential.split('.')[1]));
   handleGoogleAuth(payload.name, payload.email, payload.sub);
 }
+
+// Create Account stays disabled until OTP is verified
+document.addEventListener("DOMContentLoaded", function () {
+  setOtpVerified(false);
+});
 </script>
 <script src="js/config.js"></script>
 <script src="js/auth.js"></script>

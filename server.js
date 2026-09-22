@@ -146,6 +146,8 @@ app.use("/register",               authLimiter);
 app.use("/auth/google",            authLimiter);
 app.use("/forgot-password",        authLimiter);
 app.use("/reset-password",         authLimiter);
+app.use("/email-otp/send",         authLimiter);
+app.use("/email-otp/confirm",      authLimiter);
 app.use("/doctor/login",           authLimiter);
 app.use("/doctor/register",        authLimiter);
 app.use("/doctor/forgot-password", authLimiter);

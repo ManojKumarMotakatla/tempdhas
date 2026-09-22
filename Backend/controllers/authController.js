@@ -1,11 +1,15 @@
 // ── CHANGED: P1.4 — no SQL error details sent to client
 //            P5.2/P5.3 — backend input validation added
 //            NEW — forgot / reset password via Brevo email
+//            NEW — email OTP verification required before account creation
 const db     = require("../config/db");
 const bcrypt = require("bcrypt");
 const jwt    = require("jsonwebtoken");
 const crypto = require("crypto");
-const { sendPasswordResetEmail } = require("../utils/email");
+const { sendPasswordResetEmail, sendOtpEmail } = require("../utils/email");
+
+const OTP_EXPIRY_MINUTES = 10;
+const OTP_LENGTH = 6;
 
 function signToken(userId) {
     return jwt.sign(
@@ -34,6 +38,159 @@ function safeName(name) {
     return typeof name === "string" && name.trim().length >= 2 && name.trim().length <= 100;
 }
 
+function generateOtp() {
+    const n = crypto.randomInt(0, 1000000);
+    return String(n).padStart(OTP_LENGTH, "0");
+}
+
+/**
+ * Returns true if this email has a non-expired, verified OTP row.
+ */
+async function isEmailOtpVerified(email) {
+    const normalized = email.trim().toLowerCase();
+    const [rows] = await db.promise().query(
+        `SELECT id FROM email_otps
+         WHERE email = ? AND verified = 1 AND expires_at > NOW()
+         ORDER BY id DESC LIMIT 1`,
+        [normalized]
+    );
+    return rows.length > 0;
+}
+
+/* ── SEND EMAIL OTP ───────────────────────────────────────────────────── */
+const sendEmailOtp = async (req, res) => {
+    const { email, name } = req.body;
+
+    if (!email || !isValidEmail(email)) {
+        return res.json({ success: false, message: "Please enter a valid email address." });
+    }
+
+    const normalized = email.trim().toLowerCase();
+
+    try {
+        const [users] = await db.promise().query(
+            "SELECT id FROM users WHERE email = ? LIMIT 1",
+            [normalized]
+        );
+        if (users.length > 0) {
+            return res.json({
+                success: false,
+                message: "This email is already registered. Please login.",
+                alreadyExists: true
+            });
+        }
+
+        const [doctors] = await db.promise().query(
+            "SELECT id FROM doctors WHERE email = ? LIMIT 1",
+            [normalized]
+        );
+        if (doctors.length > 0) {
+            return res.json({
+                success: false,
+                message: "This email is already registered as a doctor. Please login.",
+                alreadyExists: true
+            });
+        }
+
+        await db.promise().query(
+            "UPDATE email_otps SET verified = 0 WHERE email = ? AND verified = 0",
+            [normalized]
+        );
+
+        const otp = generateOtp();
+        const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+
+        await db.promise().query(
+            `INSERT INTO email_otps (email, otp, verified, expires_at)
+             VALUES (?, ?, 0, ?)`,
+            [normalized, otp, expiresAt]
+        );
+
+        const emailResult = await sendOtpEmail({
+            toEmail: normalized,
+            toName:  (typeof name === "string" && name.trim()) || "there",
+            otp
+        });
+
+        if (!emailResult.success) {
+            console.error("Failed to send OTP email:", emailResult.error);
+            return res.json({
+                success: false,
+                message: "Could not send verification email. Please try again in a moment."
+            });
+        }
+
+        return res.json({
+            success: true,
+            message: `Verification code sent to ${normalized}. It expires in ${OTP_EXPIRY_MINUTES} minutes.`
+        });
+    } catch (err) {
+        console.error("sendEmailOtp error:", err.message);
+        return res.json({ success: false, message: "Something went wrong. Please try again." });
+    }
+};
+
+/* ── CONFIRM EMAIL OTP ────────────────────────────────────────────────── */
+const confirmEmailOtp = async (req, res) => {
+    const { email, otp } = req.body;
+
+    if (!email || !isValidEmail(email)) {
+        return res.json({ success: false, message: "Please enter a valid email address." });
+    }
+    if (!otp || typeof otp !== "string" || !/^\d{6}$/.test(otp.trim())) {
+        return res.json({ success: false, message: "Please enter the 6-digit verification code." });
+    }
+
+    const normalized = email.trim().toLowerCase();
+    const code = otp.trim();
+
+    try {
+        const [rows] = await db.promise().query(
+            `SELECT id, otp, verified, expires_at FROM email_otps
+             WHERE email = ?
+             ORDER BY id DESC LIMIT 1`,
+            [normalized]
+        );
+
+        if (rows.length === 0) {
+            return res.json({
+                success: false,
+                message: "No verification code found for this email. Please request a new one."
+            });
+        }
+
+        const row = rows[0];
+
+        if (new Date(row.expires_at) <= new Date()) {
+            return res.json({
+                success: false,
+                message: "This verification code has expired. Please request a new one."
+            });
+        }
+
+        if (row.verified === 1) {
+            return res.json({ success: true, message: "Email already verified. You can create your account." });
+        }
+
+        if (row.otp !== code) {
+            return res.json({ success: false, message: "Incorrect verification code. Please try again." });
+        }
+
+        await db.promise().query(
+            "UPDATE email_otps SET verified = 1, verified_at = NOW() WHERE id = ?",
+            [row.id]
+        );
+
+        return res.json({
+            success: true,
+            message: "Email verified successfully. You can now create your account."
+        });
+    } catch (err) {
+        console.error("confirmEmailOtp error:", err.message);
+        return res.json({ success: false, message: "Something went wrong. Please try again." });
+    }
+};
+
 /* ── REGISTER ─────────────────────────────────────────────────────────── */
 const register = async (req, res) => {
     const { name, email, password } = req.body;
@@ -51,41 +208,45 @@ const register = async (req, res) => {
         });
     }
 
+    const normalized = email.trim().toLowerCase();
+
     try {
-        db.query("SELECT id FROM users WHERE email = ?", [email.trim().toLowerCase()], async (err, result) => {
-            if (err) {
-                console.error("Register query error:", err.message);
-                return res.json({ success: false, message: "Registration failed. Please try again." });
-            }
+        const verified = await isEmailOtpVerified(normalized);
+        if (!verified) {
+            return res.json({
+                success: false,
+                message: "Please verify your email with the OTP code before creating an account.",
+                needsOtp: true
+            });
+        }
 
-            if (result.length > 0) {
-                return res.json({
-                    success: false,
-                    message: "This email is already registered. Please login.",
-                    alreadyExists: true
-                });
-            }
+        const [existing] = await db.promise().query(
+            "SELECT id FROM users WHERE email = ?",
+            [normalized]
+        );
 
-            try {
-                const salt       = await bcrypt.genSalt(10);
-                const bcryptHash = await bcrypt.hash(password, salt);
+        if (existing.length > 0) {
+            return res.json({
+                success: false,
+                message: "This email is already registered. Please login.",
+                alreadyExists: true
+            });
+        }
 
-                db.query(
-                    "INSERT INTO users (name, email, password, created_at) VALUES (?, ?, ?, NOW())",
-                    [name.trim(), email.trim().toLowerCase(), bcryptHash],
-                    (err2) => {
-                        if (err2) {
-                            console.error("Register insert error:", err2.message);
-                            return res.json({ success: false, message: "Registration failed. Please try again." });
-                        }
-                        res.json({ success: true, message: "Account created successfully! Please login." });
-                    }
-                );
-            } catch (hashError) {
-                console.error("Bcrypt error:", hashError.message);
-                return res.json({ success: false, message: "Registration failed. Please try again." });
-            }
-        });
+        const salt       = await bcrypt.genSalt(10);
+        const bcryptHash = await bcrypt.hash(password, salt);
+
+        await db.promise().query(
+            "INSERT INTO users (name, email, password, created_at) VALUES (?, ?, ?, NOW())",
+            [name.trim(), normalized, bcryptHash]
+        );
+
+        await db.promise().query(
+            "UPDATE email_otps SET verified = 0 WHERE email = ? AND verified = 1",
+            [normalized]
+        );
+
+        res.json({ success: true, message: "Account created successfully! Please login." });
     } catch (error) {
         console.error("Register error:", error.message);
         return res.json({ success: false, message: "Server error. Please try again later." });
@@ -335,4 +496,12 @@ const resetPassword = async (req, res) => {
     }
 };
 
-module.exports = { register, login, googleAuth, forgotPassword, resetPassword };
+module.exports = {
+    register,
+    login,
+    googleAuth,
+    forgotPassword,
+    resetPassword,
+    sendEmailOtp,
+    confirmEmailOtp
+};

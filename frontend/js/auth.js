@@ -76,13 +76,15 @@ function handleRegister(name, email, password) {
         body:    JSON.stringify({ name, email, password })   // ← plain password
     })
     .then(res => res.json())
-    .then(data => {
+        .then(data => {
         if (data.success) {
             showSuccess("Account created successfully! Redirecting to login...");
             setTimeout(() => window.location.href = "login.html", 1500);
         } else if (data.alreadyExists) {
             showError("This email is already registered.");
             showLoginLink();
+        } else if (data.needsOtp) {
+            showError(data.message || "Please verify your email with the OTP code first.");
         } else {
             showError(data.message || "Registration failed. Please try again.");
         }

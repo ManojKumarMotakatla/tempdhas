@@ -85,10 +85,32 @@ const registerDoctor = async (req, res) => {
     if (!name || !email || !password || !speciality)
         return res.json({ success: false, message: "Name, email, password and speciality are required." });
 
+    const normalized = email.trim().toLowerCase();
+
     try {
-        const [exists] = await db.promise().query("SELECT id FROM doctors WHERE email = ?", [email.toLowerCase()]);
+        // Gate: email must be OTP-verified before account creation
+        const [otpRows] = await db.promise().query(
+            `SELECT id FROM email_otps
+             WHERE email = ? AND verified = 1 AND expires_at > NOW()
+             ORDER BY id DESC LIMIT 1`,
+            [normalized]
+        );
+        if (otpRows.length === 0) {
+            return res.json({
+                success: false,
+                message: "Please verify your email with the OTP code before creating an account.",
+                needsOtp: true
+            });
+        }
+
+        const [exists] = await db.promise().query("SELECT id FROM doctors WHERE email = ?", [normalized]);
         if (exists.length > 0)
             return res.json({ success: false, message: "Email already registered.", alreadyExists: true });
+
+        // Also block if same email is already a patient
+        const [userExists] = await db.promise().query("SELECT id FROM users WHERE email = ?", [normalized]);
+        if (userExists.length > 0)
+            return res.json({ success: false, message: "This email is already registered as a patient.", alreadyExists: true });
 
         const hash = await bcrypt.hash(password, 10);
         let invite_code = generateInviteCode();
@@ -101,7 +123,13 @@ const registerDoctor = async (req, res) => {
         // is_verified = 0 on registration — doctor must complete profile first
         await db.promise().query(
             "INSERT INTO doctors (name, email, password, speciality, invite_code, is_verified) VALUES (?, ?, ?, ?, ?, 0)",
-            [name.trim(), email.toLowerCase(), hash, speciality, invite_code]
+            [name.trim(), normalized, hash, speciality, invite_code]
+        );
+
+        // Consume the verified OTP so it cannot be reused
+        await db.promise().query(
+            "UPDATE email_otps SET verified = 0 WHERE email = ? AND verified = 1",
+            [normalized]
         );
 
         res.json({ success: true, message: "Doctor account created! Please login and complete your profile to appear in the directory." });
