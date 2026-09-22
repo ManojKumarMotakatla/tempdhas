@@ -9,8 +9,8 @@
 
     if (isLocal) {
         const port = window.location.port;
-        if (port && port !== "3007" && (port === "5500" || port === "3000" || port === "5173" || port === "5501")) {
-            window.API_BASE = window.location.protocol + "//" + window.location.hostname + ":3007";
+        if (port && port !== "3006" && (port === "5500" || port === "3000" || port === "5173" || port === "5501")) {
+            window.API_BASE = window.location.protocol + "//" + window.location.hostname + ":3006";
         } else {
             window.API_BASE = window.location.origin;
         }

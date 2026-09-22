@@ -1,7 +1,7 @@
 console.log("REMINDER JS LOADED");
 // Signal to alarm-global.js that the full reminder engine is already present
 window.__DHAS_ALARM_ENGINE_LOADED__ = true;
-const API = (window.API_BASE || "http://localhost:3007") + "/reminders";
+const API = (window.API_BASE || "http://localhost:3006") + "/reminders";
 
 function getUserId() {
     const flatKeys = ["user_id","userId","uid","dhas_user_id","dhas_userId","id","user"];
@@ -50,7 +50,6 @@ function normalizeReminder(r) {
 }
 
 // ── Bottom-left toast ─────────────────────────────────────────
-// Inject styles immediately (safe — goes into <head>)
 (function injectReminderStyles() {
     if (document.getElementById("dhasToastStyle")) return;
     const style = document.createElement("style");
@@ -122,8 +121,6 @@ function normalizeReminder(r) {
     document.head.appendChild(style);
 })();
 
-// Inject DOM elements (toast + alarm container) only when <body> exists.
-// This is safe whether the script is in <head> or at end of <body>.
 function _injectReminderDOMElements() {
     if (!document.getElementById("dhasPageToast")) {
         const toast = document.createElement("div");
@@ -175,8 +172,6 @@ function getAudioCtx() {
     return audioCtx;
 }
 
-// Pre-warm AudioContext on every user interaction.
-// Browsers suspend audio created outside a user gesture — this keeps it alive.
 function _warmAudioCtx() {
     try { const ctx = getAudioCtx(); if (ctx.state === "suspended") ctx.resume(); } catch(e) {}
 }
@@ -260,7 +255,6 @@ async function enableDHASNotifications() {
 }
 
 // ── Alarm engine ──────────────────────────────────────────────
-// Sync function for service worker
 function syncRemindersWithServiceWorker() {
     if (navigator.serviceWorker?.controller) {
         navigator.serviceWorker.controller.postMessage({
@@ -292,14 +286,11 @@ function checkAlarms(catchUp) {
 
             const alarmTotalMinutes = alarmH * 60 + alarmM;
             let diff = nowTotalMinutes - alarmTotalMinutes;
-            if (diff < 0) diff += 1440; // handle midnight wrap
+            if (diff < 0) diff += 1440;
 
-            // catchUp=true: allow up to 2 minutes past (for page-load catch-up)
-            // catchUp=false: only fire in the current clock minute (diff 0 or 1)
             const maxDiff = catchUp ? 2 : 1;
             if (diff > maxDiff) return;
 
-            // Deduplicate per alarm per calendar day — one fire per day per minute
             const key = `dhas_fired_${r.id}_${t.label || "dose"}_${alarmH}_${alarmM}_${today}`;
             if (localStorage.getItem(key)) return;
             localStorage.setItem(key, "1");
@@ -325,19 +316,15 @@ function triggerAlarm(reminder, timeSlot, today) {
         ).catch(() => {});
     }
 
-    // After the last alarm of the day fires, schedule a post-alarm purge (5 min grace)
     if (reminder.duration && reminder.duration !== "forever") {
         schedulePostAlarmPurge(reminder, timeSlot);
     }
 }
 
-// When the last alarm slot fires on the last day of a fixed-duration reminder,
-// schedule auto-deletion after a 5-minute grace period.
 function schedulePostAlarmPurge(reminder, timeSlot) {
     const times = reminder.times || [];
     if (!times.length) return;
 
-    // Find the latest alarm minute across all time slots
     const latestMinute = Math.max(...times.map(t => {
         let h = parseInt(t.h); const m = parseInt(t.m);
         if (t.ampm === "PM" && h !== 12) h += 12;
@@ -345,17 +332,13 @@ function schedulePostAlarmPurge(reminder, timeSlot) {
         return h * 60 + m;
     }));
 
-    // Convert this slot to minutes
     let slotH = parseInt(timeSlot.h); const slotM = parseInt(timeSlot.m);
     if (timeSlot.ampm === "PM" && slotH !== 12) slotH += 12;
     if (timeSlot.ampm === "AM" && slotH === 12) slotH = 0;
     const thisSlotMinute = slotH * 60 + slotM;
 
-    // Only schedule purge when the LAST time slot fires
     if (thisSlotMinute !== latestMinute) return;
 
-    // Check if TODAY is the last day of the duration.
-    // A "1 day" reminder started today: daysSince=0, dur=1 → last day is day 0 (today) → 0 === 1-1 ✓
     const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
     const base = reminder.startDate
         ? new Date(reminder.startDate + "T00:00:00")
@@ -364,7 +347,6 @@ function schedulePostAlarmPurge(reminder, timeSlot) {
     const daysSince = Math.floor((todayMidnight - base) / 86400000);
     const dur = parseInt(reminder.duration);
 
-    // Last day = daysSince === dur - 1  (0-indexed: day 0 through day dur-1)
     if (daysSince < dur - 1) {
         console.log(`[DHAS] "${reminder.medicine}": day ${daysSince+1}/${dur}, not last day yet — no purge.`);
         return;
@@ -388,12 +370,10 @@ function schedulePostAlarmPurge(reminder, timeSlot) {
         } catch (err) {
             console.warn("[DHAS] Post-alarm purge failed:", err);
         }
-    }, 5 * 60 * 1000); // 5 minute grace so user can see the alarm card
+    }, 5 * 60 * 1000);
 }
 
 function showAlarmCard(reminder, timeSlot) {
-    // Ensure the alarm container exists — it may not have been ready when the
-    // script first ran (e.g. reminder.js loaded in <head> on dashboard/chat).
     _injectReminderDOMElements();
     const container = document.getElementById("dhasAlarmContainer");
     if (!container) return;
@@ -439,7 +419,6 @@ function showAlarmCard(reminder, timeSlot) {
 
 // ── Schedule helpers ──────────────────────────────────────────
 function shouldFireToday(r, dow, dom) {
-    // Allow calling without args (defaults to now)
     if (dow === undefined) { const n = new Date(); dow = n.getDay(); dom = n.getDate(); }
     const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
     if (r.startDate) {
@@ -449,7 +428,6 @@ function shouldFireToday(r, dow, dom) {
     if (r.duration && r.duration !== "forever") {
         const base = r.startDate ? new Date(r.startDate + "T00:00:00") : new Date(r.createdAt);
         base.setHours(0,0,0,0);
-        // >= means: after the last valid day, don't fire
         if (Math.floor((todayMidnight - base) / 86400000) >= parseInt(r.duration)) return false;
     }
     switch (r.sched) {
@@ -476,18 +454,14 @@ function to24(h, m, ampm) {
 }
 
 function startAlarmTicker() {
-    // 1. Immediate catch-up check on page load (within 2 min window)
     setTimeout(() => checkAlarms(true), 600);
-    // 2. Self-correcting per-minute ticker: uses recursive setTimeout
-    //    so every tick re-aligns to the real wall-clock minute boundary.
-    //    This means it NEVER drifts — fires within ~1 s of HH:MM:00.
     function scheduleTick() {
         const now = new Date();
         const msUntilNextMinute =
             (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 100;
         setTimeout(() => {
             checkAlarms(false);
-            scheduleTick(); // re-align for next minute
+            scheduleTick();
         }, msUntilNextMinute);
     }
     scheduleTick();
@@ -661,7 +635,7 @@ function doseLabel(n){ return {"1":"Once daily","2":"Twice daily","3":"Three tim
 // ── Reminder preview ──────────────────────────────────────────
 function updateReminderPreview() {
     const medicineEl = document.getElementById("medicine");
-    if (!medicineEl) return;                        // not on the reminder form page
+    if (!medicineEl) return;
     const medicine = medicineEl.value.trim();
     const preview  = document.getElementById("reminderPreview");
     if (!medicine) { preview.style.display = "none"; return; }
@@ -736,11 +710,7 @@ async function purgeExpiredReminders() {
         const daysSince = Math.floor((todayMidnight - base) / 86400000);
         const dur = parseInt(r.duration);
 
-        // Past the duration entirely (e.g. 1-day reminder, now 2 days later)
-        // daysSince >= dur means we're past the last valid day
         if (daysSince >= dur) {
-            // On the exact last day (daysSince === dur - 1 + 1 = dur):
-            // only delete after all alarms + 5 min grace so the alarm can still fire
             if (daysSince === dur) {
                 const times = r.times || [];
                 if (!times.length) return true;
@@ -750,10 +720,8 @@ async function purgeExpiredReminders() {
                     if (t.ampm === "AM" && h === 12) h = 0;
                     return h * 60 + m;
                 }));
-                // Only delete if we're past last alarm + 5 min
                 return (now.getHours() * 60 + now.getMinutes()) >= latestMin + 5;
             }
-            // daysSince > dur: well past — delete immediately
             return true;
         }
         return false;
@@ -772,8 +740,6 @@ async function purgeExpiredReminders() {
 }
 
 // ── Save reminder ─────────────────────────────────────────────
-// FIX: Removed the aggressive "filter past times" logic that blocked saving.
-// Now we save ALL selected times and let the alarm engine decide what fires.
 window.addReminder = async function () {
     const medicineInput = document.getElementById("medicine");
     const medicine      = medicineInput.value.trim();
@@ -796,7 +762,7 @@ window.addReminder = async function () {
     const startDate  = document.getElementById("startDate").value || new Date().toISOString().split("T")[0];
     const days       = getSelectedDays();
     const monthDay   = parseInt(document.getElementById("monthDay").value) || 1;
-    const times      = collectTimes();  // FIX: save all times, no filtering
+    const times      = collectTimes();
 
     if (!times || times.length === 0) {
         showPageMsg("No times configured. Please set at least one time.", "error");
@@ -824,7 +790,6 @@ window.addReminder = async function () {
         altBase: sched === "alternate" ? new Date().toISOString() : null
     };
 
-    // Show loading state
     const saveBtn = document.querySelector('.btn-dhas.primary[onclick="addReminder()"]');
     const origText = saveBtn ? saveBtn.textContent : null;
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
@@ -889,7 +854,7 @@ window.deleteReminder = async function (id) {
     setTimeout(() => card?.removeAttribute("data-pending-delete"), 4000);
 };
 
-// ── FIX-2: hasUnsavedChanges ──────────────────────────────────
+// ── hasUnsavedChanges ─────────────────────────────────────────
 function hasUnsavedChanges(id) {
     const r = remindersCache.find(x => x.id === id);
     if (!r) return false;
@@ -1329,9 +1294,7 @@ function displayReminders() {
 function goBack() { window.location.href = "dashboard.html"; }
 
 // ── Init ──────────────────────────────────────────────────────
-// Use addEventListener instead of window.onload = ... so page scripts can't overwrite it
 window.addEventListener("load", async function () {
-    // Check if we are on a page that needs full reminder form/list setup
     const isReminderPage = document.getElementById("medicine") || document.getElementById("reminderList");
 
     if (isReminderPage) {
@@ -1345,7 +1308,6 @@ window.addEventListener("load", async function () {
             startDateEl.value = today;
         }
 
-        // Force-render time slots directly in case renderScheduleUI ran too early
         const doseEl = document.getElementById("doseCount");
         const tsEl   = document.getElementById("timeSlots");
         if (doseEl && tsEl && tsEl.innerHTML.trim() === "") {
@@ -1353,20 +1315,16 @@ window.addEventListener("load", async function () {
         }
     }
 
-    // ── 2. Async: SW + notifications (won't block DOM) ──
-    registerSW();  // fire-and-forget — no await so SW install never blocks UI
+    registerSW();
     requestNotifPermission().then(granted => {
         if (isReminderPage) {
             updateNotifBanner(granted);
         }
     });
 
-    // ── 3. Load data + start alarm ticker ──
     await loadRemindersFromServer();
     startAlarmTicker();
 
-    // ── 4. Auto-reload reminders every 5 minutes ──
-    // Ensures newly saved alarms are picked up without a page refresh
     setInterval(loadRemindersFromServer, 5 * 60 * 1000);
 });
 

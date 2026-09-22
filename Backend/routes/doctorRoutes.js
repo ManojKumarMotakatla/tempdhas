@@ -7,7 +7,8 @@ const {
     connectDoctor, googleAuthDoctor, deleteDoctorAccount,
     getMyDoctors,
     getPendingRequests, acceptConnection, rejectConnection, getConnectionStatus,
-    disconnectPatient, disconnectDoctor
+    disconnectPatient, disconnectDoctor,
+    forgotPasswordDoctor, resetPasswordDoctor
 } = require("../controllers/doctorController");
 const { requireDoctorAuth } = require("../middleware/doctorAuthMiddleware");
 const { requireAuth }       = require("../middleware/authMiddleware");
@@ -16,6 +17,8 @@ const { requireAuth }       = require("../middleware/authMiddleware");
 router.post("/register",              registerDoctor);
 router.post("/login",                 loginDoctor);
 router.post("/auth/google",           googleAuthDoctor);
+router.post("/forgot-password",       forgotPasswordDoctor);
+router.post("/reset-password",        resetPasswordDoctor);
 router.get( "/all",                   getAllDoctors);
 router.get( "/public/:id",            getPublicDoctor);
 

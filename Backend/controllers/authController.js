@@ -1,8 +1,11 @@
 // ── CHANGED: P1.4 — no SQL error details sent to client
 //            P5.2/P5.3 — backend input validation added
+//            NEW — forgot / reset password via Brevo email
 const db     = require("../config/db");
 const bcrypt = require("bcrypt");
 const jwt    = require("jsonwebtoken");
+const crypto = require("crypto");
+const { sendPasswordResetEmail } = require("../utils/email");
 
 function signToken(userId) {
     return jwt.sign(
@@ -12,9 +15,7 @@ function signToken(userId) {
     );
 }
 
-// ── P5.2/P5.3: Backend validation helpers ───────────────────────────────
 function isValidEmail(email) {
-    // RFC-compliant enough for backend — frontend already does deep validation
     return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
 }
 
@@ -37,7 +38,6 @@ function safeName(name) {
 const register = async (req, res) => {
     const { name, email, password } = req.body;
 
-    // P5.2/P5.3: Validate on backend, independent of frontend
     if (!safeName(name)) {
         return res.json({ success: false, message: "Full name must be 2–100 characters." });
     }
@@ -54,7 +54,6 @@ const register = async (req, res) => {
     try {
         db.query("SELECT id FROM users WHERE email = ?", [email.trim().toLowerCase()], async (err, result) => {
             if (err) {
-                // P1.4 FIX: log internally, send generic message to client
                 console.error("Register query error:", err.message);
                 return res.json({ success: false, message: "Registration failed. Please try again." });
             }
@@ -221,4 +220,119 @@ const googleAuth = (req, res) => {
     );
 };
 
-module.exports = { register, login, googleAuth };
+/* ── FORGOT PASSWORD (patient) ────────────────────────────────────────── */
+const forgotPassword = async (req, res) => {
+    const { email } = req.body;
+
+    if (!email || !isValidEmail(email)) {
+        return res.json({ success: false, message: "Please enter a valid email address." });
+    }
+
+    const normalized = email.trim().toLowerCase();
+    const genericMsg = "If an account exists with that email, a reset link has been sent.";
+
+    try {
+        const [rows] = await db.promise().query(
+            "SELECT id, name, password, google_id FROM users WHERE email = ?",
+            [normalized]
+        );
+
+        if (rows.length === 0) {
+            return res.json({ success: true, message: genericMsg });
+        }
+
+        const user = rows[0];
+
+        if (!user.password && user.google_id) {
+            return res.json({
+                success: false,
+                message: "This account uses Google Sign-In. Please login with Google."
+            });
+        }
+
+        await db.promise().query(
+            "UPDATE password_reset_tokens SET used = 1 WHERE user_id = ? AND user_type = 'patient' AND used = 0",
+            [user.id]
+        );
+
+        const token = crypto.randomBytes(32).toString("hex");
+        const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+        await db.promise().query(
+            `INSERT INTO password_reset_tokens (user_id, doctor_id, user_type, token, expires_at)
+             VALUES (?, NULL, 'patient', ?, ?)`,
+            [user.id, token, expiresAt]
+        );
+
+        const baseUrl = (process.env.FRONTEND_URL || "https://tempdhas.onrender.com").replace(/\/$/, "");
+        const resetLink = `${baseUrl}/reset_password.html?token=${token}&type=patient`;
+
+        const emailResult = await sendPasswordResetEmail({
+            toEmail: normalized,
+            toName:  user.name,
+            resetLink,
+            role:    "patient"
+        });
+
+        if (!emailResult.success) {
+            console.error("Failed to send patient reset email for user", user.id, emailResult.error);
+        }
+
+        return res.json({ success: true, message: genericMsg });
+    } catch (err) {
+        console.error("forgotPassword error:", err.message);
+        return res.json({ success: false, message: "Something went wrong. Please try again." });
+    }
+};
+
+/* ── RESET PASSWORD (patient) ─────────────────────────────────────────── */
+const resetPassword = async (req, res) => {
+    const { token, new_password } = req.body;
+
+    if (!token || typeof token !== "string") {
+        return res.json({ success: false, message: "Invalid or missing token." });
+    }
+    if (!isStrongPassword(new_password)) {
+        return res.json({
+            success: false,
+            message: "Password must be at least 6 characters and include uppercase, lowercase, number, and symbol."
+        });
+    }
+
+    try {
+        const [rows] = await db.promise().query(
+            `SELECT id, user_id FROM password_reset_tokens
+             WHERE token = ? AND user_type = 'patient' AND used = 0 AND expires_at > NOW()`,
+            [token]
+        );
+
+        if (rows.length === 0) {
+            return res.json({ success: false, message: "This reset link is invalid or has expired." });
+        }
+
+        const { id: tokenId, user_id } = rows[0];
+        const hash = await bcrypt.hash(new_password, 10);
+
+        await db.promise().query(
+            "UPDATE users SET password = ? WHERE id = ?",
+            [hash, user_id]
+        );
+
+        await db.promise().query(
+            "UPDATE password_reset_tokens SET used = 1 WHERE id = ?",
+            [tokenId]
+        );
+
+        await db.promise().query(
+            "UPDATE password_reset_tokens SET used = 1 WHERE user_id = ? AND user_type = 'patient'",
+            [user_id]
+        );
+
+        return res.json({ success: true, message: "Password updated successfully. You can now login." });
+    } catch (err) {
+        console.error("resetPassword error:", err.message);
+        return res.json({ success: false, message: "Failed to reset password. Please try again." });
+    }
+};
+
+module.exports = { register, login, googleAuth, forgotPassword, resetPassword };

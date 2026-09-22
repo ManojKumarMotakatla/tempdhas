@@ -1,7 +1,8 @@
 const db     = require("../config/db");
 const bcrypt = require("bcrypt");
 const jwt    = require("jsonwebtoken");
-
+const crypto = require("crypto");
+const { sendPasswordResetEmail } = require("../utils/email");
 function signToken(doctorId) {
     return jwt.sign({ doctorId, role: "doctor" }, process.env.JWT_SECRET, { expiresIn: "7d" });
 }
@@ -768,6 +769,129 @@ const deleteDoctorAccount = async (req, res) => {
         return res.status(500).json({ success: false, message: "Failed to delete account." });
     }
 };
+/* ── FORGOT PASSWORD (doctor) ─────────────────────────────────────────── */
+const forgotPasswordDoctor = async (req, res) => {
+    const { email } = req.body;
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(email).trim())) {
+        return res.json({ success: false, message: "Please enter a valid email address." });
+    }
+
+    const normalized = email.trim().toLowerCase();
+    const genericMsg = "If an account exists with that email, a reset link has been sent.";
+
+    try {
+        const [rows] = await db.promise().query(
+            "SELECT id, name, password, google_id FROM doctors WHERE email = ?",
+            [normalized]
+        );
+
+        if (rows.length === 0) {
+            return res.json({ success: true, message: genericMsg });
+        }
+
+        const doctor = rows[0];
+
+        if (!doctor.password && doctor.google_id) {
+            return res.json({
+                success: false,
+                message: "This account uses Google Sign-In. Please login with Google."
+            });
+        }
+
+        await db.promise().query(
+            "UPDATE password_reset_tokens SET used = 1 WHERE doctor_id = ? AND user_type = 'doctor' AND used = 0",
+            [doctor.id]
+        );
+
+        const token = crypto.randomBytes(32).toString("hex");
+        const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+        await db.promise().query(
+            `INSERT INTO password_reset_tokens (user_id, doctor_id, user_type, token, expires_at)
+             VALUES (NULL, ?, 'doctor', ?, ?)`,
+            [doctor.id, token, expiresAt]
+        );
+
+        const baseUrl = (process.env.FRONTEND_URL || "https://tempdhas.onrender.com").replace(/\/$/, "");
+        const resetLink = `${baseUrl}/reset_password.html?token=${token}&type=doctor`;
+
+        const emailResult = await sendPasswordResetEmail({
+            toEmail: normalized,
+            toName:  doctor.name,
+            resetLink,
+            role:    "doctor"
+        });
+
+        if (!emailResult.success) {
+            console.error("Failed to send doctor reset email for doctor", doctor.id, emailResult.error);
+        }
+
+        return res.json({ success: true, message: genericMsg });
+    } catch (err) {
+        console.error("forgotPasswordDoctor error:", err.message);
+        return res.json({ success: false, message: "Something went wrong. Please try again." });
+    }
+};
+
+/* ── RESET PASSWORD (doctor) ──────────────────────────────────────────── */
+const resetPasswordDoctor = async (req, res) => {
+    const { token, new_password } = req.body;
+
+    if (!token || typeof token !== "string") {
+        return res.json({ success: false, message: "Invalid or missing token." });
+    }
+
+    const strong =
+        typeof new_password === "string" &&
+        new_password.length >= 6 &&
+        /[A-Z]/.test(new_password) &&
+        /[a-z]/.test(new_password) &&
+        /[0-9]/.test(new_password) &&
+        /[^A-Za-z0-9]/.test(new_password);
+
+    if (!strong) {
+        return res.json({
+            success: false,
+            message: "Password must be at least 6 characters and include uppercase, lowercase, number, and symbol."
+        });
+    }
+
+    try {
+        const [rows] = await db.promise().query(
+            `SELECT id, doctor_id FROM password_reset_tokens
+             WHERE token = ? AND user_type = 'doctor' AND used = 0 AND expires_at > NOW()`,
+            [token]
+        );
+
+        if (rows.length === 0) {
+            return res.json({ success: false, message: "This reset link is invalid or has expired." });
+        }
+
+        const { id: tokenId, doctor_id } = rows[0];
+        const hash = await bcrypt.hash(new_password, 10);
+
+        await db.promise().query(
+            "UPDATE doctors SET password = ? WHERE id = ?",
+            [hash, doctor_id]
+        );
+
+        await db.promise().query(
+            "UPDATE password_reset_tokens SET used = 1 WHERE id = ?",
+            [tokenId]
+        );
+
+        await db.promise().query(
+            "UPDATE password_reset_tokens SET used = 1 WHERE doctor_id = ? AND user_type = 'doctor'",
+            [doctor_id]
+        );
+
+        return res.json({ success: true, message: "Password updated successfully. You can now login." });
+    } catch (err) {
+        console.error("resetPasswordDoctor error:", err.message);
+        return res.json({ success: false, message: "Failed to reset password. Please try again." });
+    }
+};
 
 module.exports = {
     registerDoctor, loginDoctor,
@@ -776,5 +900,8 @@ module.exports = {
     connectDoctor, googleAuthDoctor, deleteDoctorAccount,
     getMyDoctors,
     getPendingRequests, acceptConnection, rejectConnection, getConnectionStatus,
-    disconnectPatient, disconnectDoctor
+    disconnectPatient, disconnectDoctor,
+    forgotPasswordDoctor, resetPasswordDoctor
 };
+
+
