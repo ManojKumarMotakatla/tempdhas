@@ -9,6 +9,7 @@
   <title>Doctor Dashboard — DHAS</title>
   <script src="js/config.js"></script>
   <script src="theme.js"></script>
+  <script src="js/language.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Fraunces:ital,wght@0,600;0,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
   <style>
@@ -517,15 +518,30 @@
     </button>
   </div>
   <div class="sidebar-section-label">Overview</div>
-  <button class="side-link active" id="sl-dashboard" onclick="showView('dashboard'); closeSidebar();"><i class="ti ti-layout-dashboard"></i><span>Dashboard</span></button>
-  <button class="side-link" id="sl-patients"  onclick="showView('patients'); closeSidebar();"><i class="ti ti-users"></i><span>My Patients</span></button>
-  <button class="side-link" id="sl-chat" onclick="window.openChat('doctor'); closeSidebar();"><i class="ti ti-message-circle-2"></i><span>Chat</span></button>
-  <div class="sidebar-section-label">Account</div>
-  <button class="side-link" id="sl-profile"  onclick="showView('profile'); closeSidebar();"><i class="ti ti-user-circle"></i><span>My Profile</span></button>
-  <button class="side-link" id="sl-edit"     onclick="showView('edit'); closeSidebar();"><i class="ti ti-edit"></i><span>Edit Profile</span></button>
-  <button class="side-link" id="sl-password" onclick="showView('password'); closeSidebar();"><i class="ti ti-lock"></i><span>Change Password</span></button>
-  <button class="side-link" onclick="window.location.href='language.html';"><i class="ti ti-language"></i><span>Language</span></button>
-  <button class="side-link" onclick="doLogout()" style="color:rgba(242,92,125,.7);margin-top:8px;"><i class="ti ti-logout"></i><span>Logout</span></button>
+  <button class="side-link active" id="sl-dashboard" onclick="showView('dashboard'); closeSidebar();">
+  <i class="ti ti-layout-dashboard"></i><span data-i18n="dashboard">Dashboard</span>
+</button>
+<button class="side-link" id="sl-patients" onclick="showView('patients'); closeSidebar();">
+  <i class="ti ti-users"></i><span data-i18n="myPatients">My Patients</span>
+</button>
+<button class="side-link" id="sl-chat" onclick="window.openChat('doctor'); closeSidebar();">
+  <i class="ti ti-message-circle-2"></i><span data-i18n="chat">Chat</span>
+</button>
+<button class="side-link" id="sl-profile" onclick="showView('profile'); closeSidebar();">
+  <i class="ti ti-user-circle"></i><span data-i18n="myProfile">My Profile</span>
+</button>
+<button class="side-link" id="sl-edit" onclick="showView('edit'); closeSidebar();">
+  <i class="ti ti-edit"></i><span data-i18n="editProfile">Edit Profile</span>
+</button>
+<button class="side-link" id="sl-password" onclick="showView('password'); closeSidebar();">
+  <i class="ti ti-lock"></i><span data-i18n="changePassword">Change Password</span>
+</button>
+<button class="side-link" onclick="window.location.href='language.html?portal=doctor';">
+  <i class="ti ti-language"></i><span data-i18n="language">Language</span>
+</button>
+<button class="side-link" onclick="doLogout()" style="color:rgba(242,92,125,.7);margin-top:8px;">
+  <i class="ti ti-logout"></i><span data-i18n="logout">Logout</span>
+</button>
 </nav>
 
 <div class="main-layout" id="mainLayout">

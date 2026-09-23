@@ -494,36 +494,80 @@
 <nav class="sidebar" id="sidebar">
   <div class="sidebar-logo">
     <div class="sidebar-logo-icon">
-      <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+      <!-- your logo SVG / icon here -->
     </div>
     <span class="sidebar-logo-text">DHAS</span>
     <button class="sidebar-close" onclick="closeSidebar()" aria-label="Close menu">
-      <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      <!-- close icon -->
     </button>
   </div>
 
-  <a href="dashboard.html"   class="side-link active"><i class="ti ti-layout-dashboard"></i><span data-i18n="dashboard">Dashboard</span></a>
-  <a href="symptom.html"     class="side-link"><i class="ti ti-notes"></i><span data-i18n="symptoms">Symptoms</span></a>
-  <a href="reports.html"     class="side-link"><i class="ti ti-report-medical"></i><span data-i18n="reports">Reports</span></a>
-  <a href="diet.html"        class="side-link"><i class="ti ti-salad"></i><span data-i18n="diet">Diet</span></a>
-  <a href="remedies.html"    class="side-link"><i class="ti ti-plant"></i><span data-i18n="remedies">Remedies</span></a>
-  <a href="reminder.html"    class="side-link"><i class="ti ti-clock"></i><span data-i18n="reminders">Reminders</span></a>
-  <a href="steps.html"       class="side-link"><i class="ti ti-run"></i><span>Activity Tracker</span></a>
-  <a href="find_doctor.html" class="side-link"><i class="ti ti-stethoscope"></i><span>Find Doctor</span></a>
-  <a href="my_doctors.html"  class="side-link"><i class="ti ti-users"></i><span>My Doctors</span></a>
-  <!--
-    CHANGED: was <a href="chat.html">. The plain link never set
-    sessionStorage.dhas_chat_role, so chat.js's "both sessions exist"
-    fallback could silently open this as the PATIENT (which happens to
-    be correct here) OR, if a doctor session in the same browser is
-    *newer*, behave unpredictably depending on load order. Now we always
-    explicitly say "I am the patient" via the shared openChat() helper
-    from js/config.js, so this never depends on guesswork.
-  -->
-  <button class="side-link" onclick="window.openChat('patient'); closeSidebar();"><i class="ti ti-message-circle-2"></i><span>Chat</span></button>
-  <a href="language.html"    class="side-link"><i class="ti ti-language"></i><span data-i18n="language">Language</span></a>
-  <a href="profile.html"     class="side-link"><i class="ti ti-user-circle"></i><span data-i18n="profile">Profile</span></a>
-  <a href="change_password.html" class="side-link" id="sideChangePw"><i class="ti ti-lock"></i><span>Change Password</span></a>
+  <!-- ── PATIENT NAV — all labels use data-i18n ── -->
+  <a href="dashboard.html" class="side-link active">
+    <i class="ti ti-layout-dashboard"></i>
+    <span data-i18n="dashboard">Dashboard</span>
+  </a>
+
+  <a href="symptom.html" class="side-link">
+    <i class="ti ti-notes"></i>
+    <span data-i18n="symptoms">Symptoms</span>
+  </a>
+
+  <a href="reports.html" class="side-link">
+    <i class="ti ti-report-medical"></i>
+    <span data-i18n="reports">Reports</span>
+  </a>
+
+  <a href="diet.html" class="side-link">
+    <i class="ti ti-salad"></i>
+    <span data-i18n="diet">Diet</span>
+  </a>
+
+  <a href="remedies.html" class="side-link">
+    <i class="ti ti-plant"></i>
+    <span data-i18n="remedies">Remedies</span>
+  </a>
+
+  <a href="reminder.html" class="side-link">
+    <i class="ti ti-clock"></i>
+    <span data-i18n="reminders">Reminders</span>
+  </a>
+
+  <a href="steps.html" class="side-link">
+    <i class="ti ti-run"></i>
+    <span data-i18n="steps">Activity Tracker</span>
+  </a>
+
+  <a href="find_doctor.html" class="side-link">
+    <i class="ti ti-stethoscope"></i>
+    <span data-i18n="findDoctor">Find Doctor</span>
+  </a>
+
+  <a href="my_doctors.html" class="side-link">
+    <i class="ti ti-users"></i>
+    <span data-i18n="myDoctors">My Doctors</span>
+  </a>
+
+  <button class="side-link" onclick="window.openChat('patient'); closeSidebar();">
+    <i class="ti ti-message-circle-2"></i>
+    <span data-i18n="chat">Chat</span>
+  </button>
+
+  <!-- IMPORTANT: portal=patient so back goes to patient dashboard -->
+  <a href="language.html?portal=patient" class="side-link">
+    <i class="ti ti-language"></i>
+    <span data-i18n="language">Language</span>
+  </a>
+
+  <a href="profile.html" class="side-link">
+    <i class="ti ti-user-circle"></i>
+    <span data-i18n="profile">Profile</span>
+  </a>
+
+  <a href="change_password.html" class="side-link" id="sideChangePw">
+    <i class="ti ti-lock"></i>
+    <span data-i18n="changePassword">Change Password</span>
+  </a>
 </nav>
 
 <div class="main-layout" id="mainLayout">

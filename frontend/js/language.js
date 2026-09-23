@@ -33,7 +33,11 @@ var TRANSLATIONS = {
     recommendation:"Recommendation", dietGuide:"Diet Guide",
     homeRemedies:"Home Remedies",
     uploadReports:"Upload & manage your health documents securely",
-    medicineReminders:"Never miss a dose — set smart medication alerts"
+    medicineReminders:"Never miss a dose — set smart medication alerts",
+    myPatients:"My Patients", chat:"Chat", myProfile:"My Profile",
+    editProfile:"Edit Profile", changePassword:"Change Password",
+    findDoctor:"Find Doctor", myDoctors:"My Doctors",
+    activityTracker:"Activity Tracker"
   },
   Hindi: {
     dashboard:"डैशबोर्ड", symptoms:"लक्षण", reports:"रिपोर्ट",
@@ -62,7 +66,11 @@ var TRANSLATIONS = {
     recommendation:"सिफारिश", dietGuide:"आहार मार्गदर्शिका",
     homeRemedies:"घरेलू उपचार",
     uploadReports:"अपने स्वास्थ्य दस्तावेज़ सुरक्षित रूप से अपलोड करें",
-    medicineReminders:"दवा लेना न भूलें — स्मार्ट अलर्ट सेट करें"
+    medicineReminders:"दवा लेना न भूलें — स्मार्ट अलर्ट सेट करें",
+    myPatients:"मेरे मरीज़", chat:"चैट", myProfile:"मेरी प्रोफ़ाइल",
+    editProfile:"प्रोफ़ाइल संपादित करें", changePassword:"पासवर्ड बदलें",
+    findDoctor:"डॉक्टर खोजें", myDoctors:"मेरे डॉक्टर",
+    activityTracker:"गतिविधि ट्रैकर"
   },
   Telugu: {
     dashboard:"డాష్‌బోర్డ్", symptoms:"లక్షణాలు", reports:"నివేదికలు",
@@ -91,95 +99,94 @@ var TRANSLATIONS = {
     recommendation:"సిఫార్సు", dietGuide:"ఆహార మార్గదర్శి",
     homeRemedies:"ఇంటి చికిత్సలు",
     uploadReports:"మీ ఆరోగ్య పత్రాలు సురక్షితంగా అప్‌లోడ్ చేయండి",
-    medicineReminders:"మందు వేయడం మర్చిపోవద్దు — స్మార్ట్ హెచ్చరికలు సెట్ చేయండి"
+    medicineReminders:"మందు వేయడం మర్చిపోవద్దు — స్మార్ట్ హెచ్చరికలు సెట్ చేయండి",
+    myPatients:"నా రోగులు", chat:"చాట్", myProfile:"నా ప్రొఫైల్",
+    editProfile:"ప్రొఫైల్ సవరించండి", changePassword:"పాస్‌వర్డ్ మార్చండి",
+    findDoctor:"డాక్టర్ కనుగొనండి", myDoctors:"నా డాక్టర్లు",
+    activityTracker:"యాక్టివిటీ ట్రాకర్"
   }
 };
 
-// ── Apply translations to the current page ────────────────────
 function applyTranslations(lang) {
+  if (!lang) lang = localStorage.getItem("dhas_language") || "English";
   var t = TRANSLATIONS[lang] || TRANSLATIONS["English"];
 
-  // data-i18n: replace textContent
   document.querySelectorAll("[data-i18n]").forEach(function(el) {
     var key = el.getAttribute("data-i18n");
     if (t[key] !== undefined) el.textContent = t[key];
   });
 
-  // data-i18n-placeholder: replace placeholder attribute
   document.querySelectorAll("[data-i18n-placeholder]").forEach(function(el) {
     var key = el.getAttribute("data-i18n-placeholder");
     if (t[key] !== undefined) el.placeholder = t[key];
   });
 
-  // Page <title>
+  document.querySelectorAll("[data-i18n-title]").forEach(function(el) {
+    var key = el.getAttribute("data-i18n-title");
+    if (t[key] !== undefined) {
+      if (el.tagName === "TITLE") el.textContent = t[key] + " — DHAS";
+      else el.setAttribute("title", t[key]);
+    }
+  });
+
   var pageTitle = document.querySelector("title");
   if (pageTitle) {
     var base = pageTitle.getAttribute("data-i18n-title");
     if (base && t[base]) pageTitle.textContent = t[base] + " — DHAS";
   }
 
-  // html lang attribute for screen readers
   var langCodes = { English: "en", Hindi: "hi", Telugu: "te" };
   document.documentElement.lang = langCodes[lang] || "en";
+
+  try {
+    window.dispatchEvent(new CustomEvent("dhas:language", { detail: { lang: lang } }));
+  } catch (e) {}
 }
 
-// ── Get a single translated string ────────────────────────────
 function t(key) {
   var lang = localStorage.getItem("dhas_language") || "English";
   var dict = TRANSLATIONS[lang] || TRANSLATIONS["English"];
   return dict[key] !== undefined ? dict[key] : (TRANSLATIONS["English"][key] || key);
 }
 
-// ── Auto-apply on every page load ─────────────────────────────
-(function autoApply() {
-  var lang = localStorage.getItem("dhas_language") || "English";
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", function() { applyTranslations(lang); });
-  } else {
-    applyTranslations(lang);
-  }
-})();
-
-// ── Language selection page functions ─────────────────────────
 function setLanguage(lang) {
+  if (!TRANSLATIONS[lang]) lang = "English";
   localStorage.setItem("dhas_language", lang);
-  highlightActive(lang);
   applyTranslations(lang);
-
-  var msg     = document.getElementById("selectedLangMsg");
-  var msgText = document.getElementById("selectedLangText");
-  if (msg) {
-    msg.style.display = "flex";
-    var names = { English:"English 🇬🇧", Hindi:"हिंदी 🇮🇳", Telugu:"తెలుగు 🇮🇳" };
-    var label = names[lang] || lang;
-    if (msgText) {
-      msgText.textContent = "Language changed to " + label + ". All pages will now display in this language.";
-    } else {
-      msg.innerHTML =
-        '<svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;flex-shrink:0">' +
-          '<path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>' +
-        '</svg>' +
-        '<span>Language changed to ' + label + '. All pages will now display in this language.</span>';
-    }
-  }
+  highlightActive(lang);
 }
 
 function highlightActive(lang) {
   ["English","Hindi","Telugu"].forEach(function(l) {
     var btn = document.getElementById("btn-" + l);
     if (btn) btn.classList.toggle("active", l === lang);
+    var card = document.getElementById("card-" + l);
+    if (card) card.classList.toggle("active", l === lang);
   });
 }
 
-// Highlight on language page load
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", function() {
+// Auto-apply on every page that includes this script
+(function autoApply() {
+  function run() {
     var lang = localStorage.getItem("dhas_language") || "English";
-    if (document.getElementById("btn-English")) highlightActive(lang);
-  });
-} else {
-  var lang = localStorage.getItem("dhas_language") || "English";
-  if (document.getElementById("btn-English")) highlightActive(lang);
-}
+    applyTranslations(lang);
+    highlightActive(lang);
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", run);
+  } else {
+    run();
+  }
+  setTimeout(run, 50);
+  setTimeout(run, 300);
+})();
 
-window.DHAS_LANG = { t: t, applyTranslations: applyTranslations, TRANSLATIONS: TRANSLATIONS };
+window.DHAS_LANG = {
+  t: t,
+  applyTranslations: applyTranslations,
+  setLanguage: setLanguage,
+  TRANSLATIONS: TRANSLATIONS
+};
+window.applyTranslations = applyTranslations;
+window.setLanguage = setLanguage;
+window.t = t;
