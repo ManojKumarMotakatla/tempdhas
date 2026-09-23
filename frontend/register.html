@@ -63,6 +63,7 @@
     .dhas-input{width:100%;padding:11px 14px;border:1.5px solid var(--border);border-radius:10px;font-family:'DM Sans',sans-serif;font-size:.92rem;color:var(--text);background:var(--bg);outline:none;transition:border-color .2s,box-shadow .2s,background .35s,color .35s;margin-bottom:4px;}
     .dhas-input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(42,108,246,.12);background:var(--surface);}
     .dhas-input::placeholder{color:var(--muted);}
+    .dhas-input[readonly]{opacity:.85;cursor:default;}
     .btn-dhas{width:100%;padding:13px;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.95rem;cursor:pointer;transition:all .2s;display:inline-block;text-align:center;}
     .btn-dhas.primary{background:linear-gradient(135deg,var(--blue),#4f8ef9);color:#fff;box-shadow:0 4px 16px rgba(42,108,246,.3);}
     .btn-dhas.primary:hover{transform:translateY(-1px);}
@@ -111,8 +112,13 @@
     .btn-otp:disabled{opacity:.55;cursor:not-allowed;}
     .btn-otp.secondary{background:transparent;border:1.5px solid var(--blue);color:var(--blue);}
     .otp-hint{font-size:.72rem;color:var(--muted);margin-top:8px;line-height:1.4;}
-    .otp-verified{font-size:.8rem;font-weight:600;color:#27ae60;margin-top:8px;display:none;}
-    .otp-verified.show{display:block;}
+    .otp-verified{font-size:.84rem;font-weight:600;color:#27ae60;margin:0;display:none;align-items:center;gap:6px;}
+    .otp-verified.show{display:flex;}
+    .otp-panel.verified{border-style:solid;border-color:#6ee7b7;background:rgba(34,208,122,.08);padding:12px 14px;}
+    html.dark .otp-panel.verified,body.dark .otp-panel.verified{border-color:rgba(110,231,183,.4);background:rgba(34,208,122,.1);}
+    .otp-controls{display:block;}
+    .otp-panel.verified .otp-controls{display:none;}
+    .otp-panel.verified .otp-hint{display:none;}
   </style>
 </head>
 <body>
@@ -147,14 +153,16 @@
 
     <!-- Email OTP verification (required before Create Account) -->
     <div class="otp-panel" id="otpPanel">
-      <label class="dhas-label">Email verification</label>
-      <div class="otp-row">
-        <button type="button" class="btn-otp" id="btnSendOtp" onclick="sendOtp()">Send OTP</button>
-        <input type="text" id="otpCode" class="dhas-input" placeholder="6-digit code" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
-        <button type="button" class="btn-otp secondary" id="btnConfirmOtp" onclick="confirmOtp()">Verify</button>
+      <label class="dhas-label" id="otpLabel">Email verification</label>
+      <div class="otp-controls" id="otpControls">
+        <div class="otp-row">
+          <button type="button" class="btn-otp" id="btnSendOtp" onclick="sendOtp()">Send OTP</button>
+          <input type="text" id="otpCode" class="dhas-input" placeholder="6-digit code" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
+          <button type="button" class="btn-otp secondary" id="btnConfirmOtp" onclick="confirmOtp()">Verify</button>
+        </div>
+        <div class="otp-hint" id="otpHint">We will email a 6-digit code. Verify it before creating your account.</div>
       </div>
-      <div class="otp-hint" id="otpHint">We will email a 6-digit code. Verify it before creating your account.</div>
-      <div class="otp-verified" id="otpVerified">✓ Email verified — you can create your account</div>
+      <div class="otp-verified" id="otpVerified">✓ Email verified</div>
     </div>
 
     <label class="dhas-label">Password</label>
@@ -280,13 +288,10 @@ function findClosestDomain(typed) {
 function deepValidateEmail(email) {
   const raw = email.trim();
   if (!raw) return { valid: false, error: null, warn: null };
-
   const atCount = (raw.match(/@/g) || []).length;
   if (atCount === 0) return { valid: false, error: "Missing @ symbol — email must look like name@gmail.com" };
   if (atCount > 1)  return { valid: false, error: "Email must have only one @ symbol" };
-
   const [local, domainPart] = raw.split("@");
-
   if (!local || local.length === 0)
     return { valid: false, error: "Missing username before @ (e.g. yourname@gmail.com)" };
   if (local.length > 64)
@@ -297,7 +302,6 @@ function deepValidateEmail(email) {
     return { valid: false, error: "Username cannot have two dots in a row" };
   if (!/^[a-zA-Z0-9._%+\-]+$/.test(local))
     return { valid: false, error: "Username contains invalid characters — only letters, numbers, dots, hyphens, and underscores are allowed" };
-
   if (!domainPart || domainPart.length === 0)
     return { valid: false, error: "Missing domain after @ — email must look like name@gmail.com" };
   if (!domainPart.includes("."))
@@ -306,15 +310,12 @@ function deepValidateEmail(email) {
     return { valid: false, error: "Domain cannot start or end with a dot" };
   if (domainPart.includes(".."))
     return { valid: false, error: "Domain cannot have two dots in a row" };
-
   const labels = domainPart.toLowerCase().split(".");
   const tld    = labels[labels.length - 1];
-
   if (!/^[a-z]+$/.test(tld))
     return { valid: false, error: `".${tld}" is not a valid domain extension — did you mean .com, .in, or .org?` };
   if (!VALID_TLDS.has(tld))
     return { valid: false, error: `".${tld}" is not a recognised email domain extension — common ones are .com, .in, .net, .org` };
-
   for (let i = 0; i < labels.length - 1; i++) {
     const lbl = labels[i];
     if (lbl.length < 2)
@@ -326,20 +327,15 @@ function deepValidateEmail(email) {
     if (!/^[a-z0-9\-]+$/.test(lbl))
       return { valid: false, error: `Domain label "${lbl}" contains invalid characters` };
   }
-
   if (BAD_DOMAINS.has(domainPart.toLowerCase()))
     return { valid: false, error: "Disposable/temporary email addresses are not allowed — please use your real email" };
-
   const closest = findClosestDomain(domainPart);
   if (closest) {
     const isLikelyTypo = closest.distance <= 2;
     const suggestion   = `${local}@${closest.suggestion}`;
     if (isLikelyTypo) {
       return {
-        valid: false,
-        error: null,
-        typo: true,
-        suggestion,
+        valid: false, error: null, typo: true, suggestion,
         warn: `Did you mean <strong>${suggestion}</strong>? "${domainPart}" looks like a typo.`
       };
     } else {
@@ -349,7 +345,6 @@ function deepValidateEmail(email) {
       };
     }
   }
-
   return { valid: true, warn: null };
 }
 
@@ -385,22 +380,13 @@ function validateEmail(email) {
   const hasAt  = raw.includes("@");
   const hasDot = hasAt && raw.split("@")[1]?.includes(".");
   if (result.error) {
-    if (hasDot || result.typo) {
-      setEmailUI("invalid", result.error);
-    } else if (hasAt && result.error.includes("@")) {
-      setEmailUI("reset");
-    } else if (hasAt) {
-      setEmailUI("invalid", result.error);
-    } else {
-      setEmailUI("reset");
-    }
-  } else if (result.typo) {
-    setEmailUI("warn", result.warn);
-  } else if (result.warn) {
-    setEmailUI("warn", result.warn);
-  } else if (result.valid && hasDot) {
-    setEmailUI("valid");
-  }
+    if (hasDot || result.typo) setEmailUI("invalid", result.error);
+    else if (hasAt && result.error.includes("@")) setEmailUI("reset");
+    else if (hasAt) setEmailUI("invalid", result.error);
+    else setEmailUI("reset");
+  } else if (result.typo) setEmailUI("warn", result.warn);
+  else if (result.warn) setEmailUI("warn", result.warn);
+  else if (result.valid && hasDot) setEmailUI("valid");
 }
 
 function validateEmailStrict(email) {
@@ -408,15 +394,10 @@ function validateEmailStrict(email) {
   if (!raw) { setEmailUI("reset"); return; }
   const result = deepValidateEmail(raw);
   _lastValidationResult = result;
-  if (result.error) {
-    setEmailUI("invalid", result.error);
-  } else if (result.typo) {
-    setEmailUI("warn", result.warn);
-  } else if (result.warn) {
-    setEmailUI("warn", result.warn);
-  } else if (result.valid) {
-    setEmailUI("valid");
-  }
+  if (result.error) setEmailUI("invalid", result.error);
+  else if (result.typo) setEmailUI("warn", result.warn);
+  else if (result.warn) setEmailUI("warn", result.warn);
+  else if (result.valid) setEmailUI("valid");
 }
 
 function isEmailAcceptable(email) {
@@ -477,8 +458,14 @@ let otpCooldownUntil = 0;
 
 function setOtpVerified(ok) {
   emailVerified = !!ok;
+  const panel = document.getElementById("otpPanel");
   const badge = document.getElementById("otpVerified");
+  const label = document.getElementById("otpLabel");
+  const emailEl = document.getElementById("email");
+  if (panel) panel.classList.toggle("verified", emailVerified);
   if (badge) badge.classList.toggle("show", emailVerified);
+  if (label) label.style.display = emailVerified ? "none" : "";
+  if (emailEl) emailEl.readOnly = emailVerified;
   const createBtn = document.getElementById("btnCreateAccount") || document.querySelector(".btn-dhas.primary");
   if (createBtn) createBtn.disabled = !emailVerified;
 }
@@ -489,6 +476,8 @@ function resetOtpState() {
   if (code) code.value = "";
   const hint = document.getElementById("otpHint");
   if (hint) hint.textContent = "We will email a 6-digit code. Verify it before creating your account.";
+  const emailEl = document.getElementById("email");
+  if (emailEl) emailEl.readOnly = false;
 }
 
 (function wireEmailChange() {
@@ -506,13 +495,11 @@ async function sendOtp() {
   const okBox  = document.getElementById("successMsg");
   const btn    = document.getElementById("btnSendOtp");
   const hint   = document.getElementById("otpHint");
-
   const showErr = msg => {
     errBox.innerHTML = msg; errBox.style.display = "block";
     okBox.style.display = "none";
   };
   errBox.style.display = "none";
-
   if (!email) { showErr("Enter your email address first."); return; }
   const emailResult = deepValidateEmail(email);
   if (!emailResult.valid || emailResult.typo) {
@@ -520,13 +507,11 @@ async function sendOtp() {
     showErr(emailResult.error || "Please enter a valid email before requesting an OTP.");
     return;
   }
-
   if (Date.now() < otpCooldownUntil) {
     const secs = Math.ceil((otpCooldownUntil - Date.now()) / 1000);
     showErr("Please wait " + secs + "s before requesting another code.");
     return;
   }
-
   btn.disabled = true;
   btn.textContent = "Sending…";
   try {
@@ -535,7 +520,6 @@ async function sendOtp() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, name })
     }).then(r => r.json());
-
     if (res.success) {
       okBox.textContent = res.message || "OTP sent. Check your inbox.";
       okBox.style.display = "block";
@@ -560,16 +544,13 @@ async function confirmOtp() {
   const errBox = document.getElementById("errorMsg");
   const okBox  = document.getElementById("successMsg");
   const btn    = document.getElementById("btnConfirmOtp");
-
   const showErr = msg => {
     errBox.innerHTML = msg; errBox.style.display = "block";
     okBox.style.display = "none";
   };
   errBox.style.display = "none";
-
   if (!email) { showErr("Enter your email address first."); return; }
   if (!/^\d{6}$/.test(otp)) { showErr("Enter the 6-digit code from your email."); return; }
-
   btn.disabled = true;
   btn.textContent = "…";
   try {
@@ -578,7 +559,6 @@ async function confirmOtp() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, otp })
     }).then(r => r.json());
-
     if (res.success) {
       setOtpVerified(true);
       okBox.textContent = res.message || "Email verified!";
@@ -595,51 +575,39 @@ async function confirmOtp() {
   }
 }
 
-// ── FORM SUBMIT ───────────────────────────────────────────────
 async function submitRegister() {
   const name     = document.getElementById("name").value.trim();
   const email    = document.getElementById("email").value.trim();
   const password = document.getElementById("password").value;
   const errBox   = document.getElementById("errorMsg");
   const okBox    = document.getElementById("successMsg");
-
   const showErr = msg => {
     errBox.innerHTML  = msg;
     errBox.style.display = "block";
     okBox.style.display  = "none";
   };
   errBox.style.display = "none";
-
   if (!name) { showErr("Full name is required."); return; }
   if (!email) { showErr("Email address is required."); return; }
-
   const emailResult = deepValidateEmail(email);
-
   if (!emailResult.valid || emailResult.typo) {
     validateEmailStrict(email);
-    if (emailResult.error) {
-      showErr(emailResult.error);
-    } else if (emailResult.typo) {
+    if (emailResult.error) showErr(emailResult.error);
+    else if (emailResult.typo)
       showErr(`"${email.split("@")[1]}" looks like a typo. Did you mean <strong>${emailResult.suggestion}</strong>?<br>Please correct your email address before continuing.`);
-    } else {
-      showErr("Please enter a valid email address (e.g. yourname@gmail.com).");
-    }
+    else showErr("Please enter a valid email address (e.g. yourname@gmail.com).");
     document.getElementById("email").focus();
     return;
   }
-
   validateEmailStrict(email);
-
   if (!isPasswordValid(password)) {
     showErr("Password must be at least 6 characters and include an uppercase letter, a lowercase letter, a number, and a symbol.");
     return;
   }
-
   if (!emailVerified) {
     showErr("Please verify your email with the OTP code before creating an account. Click <strong>Send OTP</strong>, then <strong>Verify</strong>.");
     return;
   }
-
   handleRegister(name, email, password);
 }
 
@@ -648,7 +616,6 @@ function handleCredentialResponse(response) {
   handleGoogleAuth(payload.name, payload.email, payload.sub);
 }
 
-// Create Account stays disabled until OTP is verified
 document.addEventListener("DOMContentLoaded", function () {
   setOtpVerified(false);
 });
